@@ -38,7 +38,7 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.1.34"
+#define SOFT_VERSION "0.1.35"
 #define SOFT_DATE "2020-05-05"
 
 #define DEBUG 1
@@ -90,16 +90,14 @@ const char* wifiApSsid = SOFT_NAME;
 
 
 // Update info
-#define BASE_URL "http://mangue.net/ota/esp/bicoqueTemperature/"
-#define UPDATE_URL "http://mangue.net/ota/esp/bicoqueTemperature/update.php"
+#define BASE_URL "http://mangue.net/ota/esp/" SOFT_NAME "/"
+#define UPDATE_URL BASE_URL "update.php"
 
 
 // OpenWeather Info
-// String owLocation   = "Saint-Andre-les-Lille, FR";
 String owLocationId  = "2981779";
 String owApiKey      = "647f72169b95765a6a67fcc452ce15d8";
 String owUrlBase     = "http://api.openweathermap.org/data/2.5/weather";
-//String owUrl         = String( owUrlBase + "?q=" + owLocation + "&APPID=" + owApiKey);
 String owUrl         = String( owUrlBase + "?id=" + owLocationId + "&APPID=" + owApiKey);
 
 
@@ -129,9 +127,15 @@ typedef struct config
 config softConfig;
 
 
-
-
-
+typedef struct meteoStruct
+{
+  float temp;
+  int humidity;
+  float wind_speed;
+  int wind_degree;
+  String icon;
+};
+meteoStruct Meteo;
 
 
 
@@ -152,7 +156,7 @@ String storageRead(char *fileName)
   File file = SPIFFS.open(fileName, "r");
   if (!file)
   {
-    logger("FS: opening file error");
+    //logger("FS: opening file error");
     //-- debug
   }
   else
@@ -203,7 +207,7 @@ void dataClear()
 
 void dataSave()
 {
-  int timestamp = getTime();
+  int timestamp = timeClient.getEpochTime();
   String lineToLog = String(timestamp);
   lineToLog += ",";
   lineToLog += temperature;
@@ -340,208 +344,9 @@ void configDump(config ConfigTemp)
 
 
 
-// ********************************************
-// Time and Stats Functions
-// ********************************************
-long getTime()
-{
-  // get mili from begining
-  long timeInSec = timeAtStarting + millis() / 1000; // work in sec instead of milisec
-
-  return timeInSec;
-}
-
-long getTimeOnStartup()
-{
-  // send NTP request. or get a webpage with a timestamp
-
-  HTTPClient httpClient;
-  httpClient.begin("http://mangue.net/ota/esp/bicoqueEvse/timestamp.php");
-  int httpAnswerCode = httpClient.GET();
-  String timestamp;
-  if (httpAnswerCode > 0)
-  {
-    timestamp = httpClient.getString();
-  }
-  httpClient.end();
-
-  // global variable
-  timeAtStarting = timestamp.toInt() - (millis() / 1000);
-
-}
-
-
-
-// ********************************************
-// WebServer
-// ********************************************
-void webRoot() 
-{
-  String message = "<!DOCTYPE HTML>";
-  message += "<html>";
-
-  message += SOFT_NAME;
-  message += " v";
-  message += SOFT_VERSION;
-  message += " <a href='/reload'>reload</a> ";
-  message += "<br><br>";
-
-  message += "Temperature : "; message += temperature; message += " °C<br>";
-  message += "Adjustment : "; message += softConfig.temp.adjustment; message += " °C<br>";
-  message += "Adjustment : "; message += softConfig.temp.checkTimer; message += " sec<br>";
-  message += "<br><br>";
-
-  message += "Wifi power : "; message += WiFi.RSSI(); message += "<br>";
-  message += "Wifi power : "; message += wifiPower(); message += "<br>";
-  message += "<br>";
-
-  message += "</html>";
-  server.send(200, "text/html", message);
-}
-void webDebug()
-{
-  String message = "<!DOCTYPE HTML>";
-  message += "<html>";
-  message += SOFT_NAME; message += " - debug -<a href='/reload'>reload</a> ";
-  message += "<br><br>\n";
-  message += "<form action='/write' method='GET'>Adjustment  : <input type=text name=adjustment><input type=submit></form><br>\n";
-  message += "<form action='/write' method='GET'>Check Timer : <input type=text name=checkTimer><input type=submit></form><br>\n";
-  message += "<br><br>\n";
-  message += "<a href='/reboot'>Rebbot device</a><br>\n";
-  message += "</html>\n";
-  server.send(200, "text/html", message);
-}
-void webReboot()
-{
-  String message = "<!DOCTYPE HTML>";
-  message += "<html>";
-  message += "Rebbot in progress...<b>";
-  message += "</html>\n";
-  server.send(200, "text/html", message);
-
-  ESP.restart();
-}
-void webApiConfig()
-{
-  String dataJsonConfig = configSerialize();
-  server.send(200, "application/json", dataJsonConfig);
-}
-
-void webApiHistoryClear()
-{
-  dataClear();
-  server.send(200, "text/html", "done");
-}
-
-void webTemperature()
-{
-  server.send(200, "text/html", String(temperature));
-}
-
-
-
-
-void webNotFound() {
-  String message = "File Not Found\n\n";
-  message += "URI: ";
-  message += server.uri();
-  message += "\nMethod: ";
-  message += (server.method() == HTTP_GET) ? "GET" : "POST";
-  message += "\nArguments: ";
-  message += server.args();
-  message += "\n";
-  for (uint8_t i = 0; i < server.args(); i++) {
-    message += " Name: " + server.argName(i) + " - Value: " + server.arg(i) + "\n";
-  }
-  server.send(404, "text/plain", message);
-}
-void webReload()
-{
-  webRoot();
-}
-
-void webWrite()
-{
-  String message;
-
-  String adjustment  = server.arg("adjustment");
-  String checkTimer  = server.arg("checkTimer");
-  String wifiEnable  = server.arg("wifienable");
-  String alreadyBoot = server.arg("alreadyboot");
-
-  
-  if ( alreadyBoot != "")
-  {
-    softConfig.alreadyStart = false;
-    if ( alreadyBoot == "1") { softConfig.alreadyStart = true; }
-    configSave();
-  }
-  if ( wifiEnable != "")
-  {
-    softConfig.wifi.enable = false;
-    if ( wifiEnable == "1") { softConfig.wifi.enable = true; }
-    configSave();
-  }
-  if (adjustment != "")
-  {
-    softConfig.temp.adjustment = adjustment.toFloat();
-    configSave();
-  }
-  if (checkTimer != "")
-  {
-    softConfig.temp.checkTimer = checkTimer.toInt();
-    configSave();
-  }
-
-  Serial.println("Write done");
-  message += "Write done...\n";
-  server.send(200, "text/plain", message);
-}
-void webInitRoot()
-{
-  String wifiList = wifiScan();
-  String message = "<!DOCTYPE HTML>";
-  message += "<html>";
-
-  message += SOFT_NAME;
-  message += "<br><br>\n";
-
-  message += "Please configure your Wifi : <br>\n";
-  message += "<p>\n";
-  message += wifiList;
-  message += "</p>\n<form method='get' action='setting'><label>SSID: </label><input name='ssid' length=32><input name='pass' length=64><input type='submit'></form>\n";
-  message += "</html>\n";
-  server.send(200, "text/html", message);
-}
-void webInitSetting()
-{
-  String content;
-  int statusCode;
-  String qsid = server.arg("ssid");
-  String qpass = server.arg("pass");
-  if (qsid.length() > 0 && qpass.length() > 0)
-  {
-    Serial.print("Debug : qsid : ");Serial.println(qsid);
-    Serial.print("Debug : qpass : ");Serial.println(qpass);
-    softConfig.wifi.ssid     = qsid;
-    softConfig.wifi.password = qpass;
-    softConfig.wifi.enable   = 1;
-    configSave();
-
-    content = "{\"Success\":\"saved to eeprom... reset to boot into new wifi\"}";
-    statusCode = 200;
-  }
-  else
-  {
-    content = "{\"Error\":\"404 not found\"}";
-    statusCode = 404;
-    Serial.println("Sending 404");
-  }
-  server.send(statusCode, "application/json", content);
-}
-
-
+// ------------------------------
 // Wifi
+// ------------------------------
 bool wifiConnectSsid(const char* ssid, const char* password)
 {
   Serial.println(ssid);
@@ -600,7 +405,6 @@ String wifiScan(void)
 }
 void wifiReset()
 {
-
   softConfig.wifi.ssid     = "";
   softConfig.wifi.password = "";
   configSave();
@@ -683,7 +487,49 @@ bool wifiConnect(String ssid, String password)
 }
 
 
+// --------------------------------
+// Update
+// --------------------------------
+void updateCheck()
+{
+    display.println("- check update");
+    display.display();
 
+    String updateUrl = UPDATE_URL;
+    Serial.println("Check for new update at : "); Serial.println(updateUrl);
+    ESPhttpUpdate.rebootOnUpdate(1);
+    t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, SOFT_VERSION);
+    //t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, ESP.getSketchMD5() );
+
+    Serial.print("return : "); Serial.println(ret);
+    switch (ret) {
+      case HTTP_UPDATE_FAILED:
+        Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+        break;
+
+      case HTTP_UPDATE_NO_UPDATES:
+        Serial.println("HTTP_UPDATE_NO_UPDATES");
+        break;
+
+      case HTTP_UPDATE_OK:
+        Serial.println("HTTP_UPDATE_OK");
+        break;
+
+      default:
+        Serial.print("Undefined HTTP_UPDATE Code: "); Serial.println(ret);
+    }
+    display.println("update done");
+    display.display();
+}
+
+
+
+
+
+
+// -------------------------------
+// Logger function
+// -------------------------------
 String urlencode(String str)
 {
   String encodedString = "";
@@ -723,7 +569,6 @@ String urlencode(String str)
   return encodedString;
 }
 
-
 void logger(String message)
 {
   if (internetConnection)
@@ -737,6 +582,285 @@ void logger(String message)
     httpClient.GET();
     httpClient.end();
   }
+}
+
+
+
+
+void testscrolltext(void) 
+{
+  String message = "un texte qui est tres long et qui depasse";
+  int x, minX;
+  x = display.width();
+  minX = -12 * message.length();
+
+  // loop
+  for( int i = 0; i < 400; i++)
+  {
+    // Clear line
+    display.fillRect(0, 54, 128, 64, BLACK);
+
+    display.setCursor(x, 56);
+    display.print(message);
+    display.display();
+    x=x-1;
+  }
+
+}
+
+
+
+// -----------------
+// OpenWeather
+// -----------------
+String openWeatherCall()
+{
+  HTTPClient http; //Declare an object of class HTTPClient
+  http.begin(owUrl);
+  int httpCode = http.GET(); // send the request
+
+  String payload;
+
+  if (httpCode > 0) // check the returning code
+  {
+    payload = http.getString(); //Get the request response payload
+  }
+  http.end(); //Close connection
+
+  return payload;
+}
+
+void openWeatherGetWeather(meteoStruct &meteo)
+{
+    String jsonData = openWeatherCall();
+
+    DynamicJsonDocument root(4096);
+
+    // Parse JSON object
+    DeserializationError jsonError = deserializeJson(root, jsonData);
+    if (jsonError)
+    {
+      Serial.println("Got Error when deserialization : "); //Serial.println(jsonError);
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(jsonError.c_str());
+
+      return;
+    }
+
+   // json data :
+   // {"coord":{"lon":3.05,"lat":50.67},
+   // "weather":[{"id":804,"main":"Clouds","description":"overcast clouds","icon":"04d"}],
+   // "base":"stations",
+   // "main":{"temp":285.04,"feels_like":279.19,"temp_min":283.71,"temp_max":286.48,"pressure":1019,"humidity":62},
+   // "visibility":10000,
+   // "wind":{"speed":6.7,"deg":50},
+   // "clouds":{"all":97},
+   // "dt":1588672109,
+   // "sys":{"type":1,"id":6559,"country":"FR","sunrise":1588652067,"sunset":1588706065},
+   // "timezone":7200,
+   // "id":2981779,
+   // "name":"Lille"
+   // ,"cod":200}
+
+
+    meteo.temp        = (float)(root["main"]["temp"]) - 273.15; // get temperature in °C
+    meteo.humidity    = root["main"]["humidity"];               // get humidity in %
+    meteo.wind_speed  = root["wind"]["speed"];                  // get wind speed in m/s
+    meteo.wind_degree = root["wind"]["deg"];                    // get wind degree in °
+    meteo.icon        = root["weather"][0]["icon"].as<String>();
+
+}
+
+
+void displayMeteo()
+{
+
+/*
+    // print data
+    Serial.printf("Temperature = %.2f°C\r\n", temp);
+    Serial.printf("Humidity = %d %%\r\n", humidity);
+    Serial.printf("Wind speed = %.1f m/s\r\n", wind_speed);
+    Serial.printf("Wind degree = %d°\r\n\r\n", wind_degree);
+*/
+}
+
+
+
+
+
+
+
+
+
+
+
+
+// ********************************************
+// WebServer
+// ********************************************
+void webRoot() 
+{
+  String message = "<!DOCTYPE HTML>";
+  message += "<html>";
+
+  message += SOFT_NAME;
+  message += " v";
+  message += SOFT_VERSION;
+  message += " <a href='/reload'>reload</a> ";
+  message += "<br><br>";
+
+  message += "Temperature : "; message += temperature; message += " °C<br>";
+  message += "Adjustment : "; message += softConfig.temp.adjustment; message += " °C<br>";
+  message += "Adjustment : "; message += softConfig.temp.checkTimer; message += " sec<br>";
+  message += "<br><br>";
+
+  message += "Wifi power : "; message += WiFi.RSSI(); message += "<br>";
+  message += "Wifi power : "; message += wifiPower(); message += "<br>";
+  message += "<br>";
+
+  message += "</html>";
+  server.send(200, "text/html", message);
+}
+void webDebug()
+{
+  String message = "<!DOCTYPE HTML>";
+  message += "<html>";
+  message += SOFT_NAME; message += " - debug -<a href='/reload'>reload</a> ";
+  message += "<br><br>\n";
+  message += "<form action='/write' method='GET'>Adjustment  : <input type=text name=adjustment><input type=submit></form><br>\n";
+  message += "<form action='/write' method='GET'>Check Timer : <input type=text name=checkTimer><input type=submit></form><br>\n";
+  message += "<br><br>\n";
+  message += "<a href='/reboot'>Rebbot device</a><br>\n";
+  message += "</html>\n";
+  server.send(200, "text/html", message);
+}
+void webReboot()
+{
+  String message = "<!DOCTYPE HTML>";
+  message += "<html>";
+  message += "Rebbot in progress...<b>";
+  message += "</html>\n";
+  server.send(200, "text/html", message);
+
+  ESP.restart();
+}
+void webApiConfig()
+{
+  String dataJsonConfig = configSerialize();
+  server.send(200, "application/json", dataJsonConfig);
+}
+
+void webApiHistoryClear()
+{
+  dataClear();
+  server.send(200, "text/html", "done");
+}
+
+void webTemperature()
+{
+  server.send(200, "text/html", String(temperature));
+}
+
+void webNotFound() {
+  String message = "File Not Found\n\n";
+  message += "URI: ";
+  message += server.uri();
+  message += "\nMethod: ";
+  message += (server.method() == HTTP_GET) ? "GET" : "POST";
+  message += "\nArguments: ";
+  message += server.args();
+  message += "\n";
+  for (uint8_t i = 0; i < server.args(); i++) {
+    message += " Name: " + server.argName(i) + " - Value: " + server.arg(i) + "\n";
+  }
+  server.send(404, "text/plain", message);
+}
+
+void webReload()
+{
+  webRoot();
+}
+
+void webWrite()
+{
+  String message;
+
+  String adjustment  = server.arg("adjustment");
+  String checkTimer  = server.arg("checkTimer");
+  String wifiEnable  = server.arg("wifienable");
+  String alreadyBoot = server.arg("alreadyboot");
+
+  
+  if ( alreadyBoot != "")
+  {
+    softConfig.alreadyStart = false;
+    if ( alreadyBoot == "1") { softConfig.alreadyStart = true; }
+    configSave();
+  }
+  if ( wifiEnable != "")
+  {
+    softConfig.wifi.enable = false;
+    if ( wifiEnable == "1") { softConfig.wifi.enable = true; }
+    configSave();
+  }
+  if (adjustment != "")
+  {
+    softConfig.temp.adjustment = adjustment.toFloat();
+    configSave();
+  }
+  if (checkTimer != "")
+  {
+    softConfig.temp.checkTimer = checkTimer.toInt();
+    configSave();
+  }
+
+  Serial.println("Write done");
+  message += "Write done...\n";
+  server.send(200, "text/plain", message);
+}
+
+void webWifiSetup()
+{
+  String wifiList = wifiScan();
+  String message = "<!DOCTYPE HTML>";
+  message += "<html>";
+
+  message += SOFT_NAME;
+  message += "<br><br>\n";
+
+  message += "Please configure your Wifi : <br>\n";
+  message += "<p>\n";
+  message += wifiList;
+  message += "</p>\n<form method='get' action='setting'><label>SSID: </label><input name='ssid' length=32><input name='pass' length=64><input type='submit'></form>\n";
+  message += "</html>\n";
+  server.send(200, "text/html", message);
+}
+
+void webWifiWrite()
+{
+  String content;
+  int statusCode;
+  String qsid = server.arg("ssid");
+  String qpass = server.arg("pass");
+  if (qsid.length() > 0 && qpass.length() > 0)
+  {
+    Serial.print("Debug : qsid : ");Serial.println(qsid);
+    Serial.print("Debug : qpass : ");Serial.println(qpass);
+    softConfig.wifi.ssid     = qsid;
+    softConfig.wifi.password = qpass;
+    softConfig.wifi.enable   = 1;
+    configSave();
+
+    content = "{\"Success\":\"saved to eeprom... reset to boot into new wifi\"}";
+    statusCode = 200;
+  }
+  else
+  {
+    content = "{\"Error\":\"404 not found\"}";
+    statusCode = 404;
+    Serial.println("Sending 404");
+  }
+  server.send(statusCode, "application/json", content);
 }
 
 void webApiHistory()
@@ -787,157 +911,12 @@ void webDisplay()
   server.send(200, "text/html", message);
 }
 
-
-void testscrolltext(void) 
-{
-  String message = "un texte qui est tres long et qui depasse";
-  int x, minX;
-  x = display.width();
-  minX = -12 * message.length();
-
-  // loop
-  for( int i = 0; i < 400; i++)
-  {
-    // Clear line
-    display.fillRect(0, 54, 128, 64, BLACK);
-
-    display.setCursor(x, 56);
-    display.print(message);
-    display.display();
-    x=x-1;
-  }
-
-}
-
-
-
-// -----------------
-// OpenWeather
-// -----------------
 void webApiForecast()
 {
-  HTTPClient http; //Declare an object of class HTTPClient
-  http.begin(owUrl);
-  int httpCode = http.GET(); // send the request
-
-  String message;
-
-  if (httpCode > 0) // check the returning code
-  {
-    String payload = http.getString(); //Get the request response payload
-    http.end(); //Close connection
-
-    message = payload;
-
-    DynamicJsonDocument root(4096);
-
-    // Parse JSON object
-    DeserializationError jsonError = deserializeJson(root, payload);
-    if (jsonError)
-    {
-      Serial.println("Got Error when deserialization : "); //Serial.println(jsonError);
-      Serial.print(F("deserializeJson() failed: "));
-      Serial.println(jsonError.c_str());
- 
-      server.send(200, "text/html", jsonError.c_str());
-
-      return;
-      // Getting error when deserialise... I don know what to do here...
-    }
-  }
-
-
-  server.send(200, "text/html", message);  
+  String message = openWeatherCall();
+  server.send(200, "text/html", message);
 }
 
-
-void openWeatherGet()
-{
-  HTTPClient http; //Declare an object of class HTTPClient
-  http.begin(owUrl);
-  int httpCode = http.GET(); // send the request
-
-  
-  if (httpCode > 0) // check the returning code
-  {
-    String payload = http.getString(); //Get the request response payload
-
-    DynamicJsonDocument root(4096);
-
-    // Parse JSON object
-    DeserializationError jsonError = deserializeJson(root, payload);
-    if (jsonError)
-    {
-      Serial.println("Got Error when deserialization : "); //Serial.println(jsonError);
-      Serial.print(F("deserializeJson() failed: "));
-      Serial.println(jsonError.c_str());
-      return;
-      // Getting error when deserialise... I don know what to do here...
-    }
-
-   // {"coord":{"lon":3.05,"lat":50.67},
-   // "weather":[{"id":804,"main":"Clouds","description":"overcast clouds","icon":"04d"}],
-   // "base":"stations",
-   // "main":{"temp":285.04,"feels_like":279.19,"temp_min":283.71,"temp_max":286.48,"pressure":1019,"humidity":62},
-   // "visibility":10000,
-   // "wind":{"speed":6.7,"deg":50},
-   // "clouds":{"all":97},
-   // "dt":1588672109,
-   // "sys":{"type":1,"id":6559,"country":"FR","sunrise":1588652067,"sunset":1588706065},
-   // "timezone":7200,
-   // "id":2981779,
-   // "name":"Saint-André-lez-Lille"
-   // ,"cod":200}
-
-
-    float temp       = (float)(root["main"]["temp"]) - 273.15; // get temperature in °C
-    int humidity     = root["main"]["humidity"];               // get humidity in %
-    float wind_speed = root["wind"]["speed"];                  // get wind speed in m/s
-    int wind_degree  = root["wind"]["deg"];                    // get wind degree in °
-    String icon      = root["weather"][0]["icon"]; 
-
-    uint8_t iconChar = getMeteoconIcon(icon);
-
-    // print data
-    Serial.printf("Temperature = %.2f°C\r\n", temp);
-    Serial.printf("Humidity = %d %%\r\n", humidity);
-    Serial.printf("Wind speed = %.1f m/s\r\n", wind_speed);
-    Serial.printf("Wind degree = %d°\r\n\r\n", wind_degree);
-
-    // draw line
-    display.drawLine(80,5, 80,40, WHITE); // Verticaly
-    display.drawLine(5,50, 123,50, WHITE); // Horizontal
-
-    // icon
-    display.setTextSize(1);            // Set font size to defaut
-    display.setTextColor(WHITE);
-    display.setFont(&Weathericon);        // Change font
-    display.setCursor(95,22);    // Just cause Icon are pretty "big"
-    display.write(iconChar);
-    display.setFont();
-
-    display.setCursor(90, 32); //was 85
-    display.print(temp, 1);
-    display.print(" C");
-    // display.drawRect(109, 24, 3, 3, WHITE); // put degree symbol ( ° )
-    // display.drawRect(97, 56, 3, 3, WHITE);
-    display.display();
-
-  }
-
-  http.end(); //Close connection
-}
-
-
-
-
-
-
-
-
-
-
-// Test
 void web_index()
 {
 
@@ -1050,16 +1029,65 @@ setInterval(function ( ) {
 }
 
 
-// Replaces placeholder with DHT values
-String processor(const String& var)
+
+
+// DISPLAY Screen
+void screenDisplayMain()
 {
-  //Serial.println(var);
-  if(var == "TEMPERATURE")
-  {
-    return String(temperature);
-  }
-  return String();
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  // draw lines
+  display.drawLine(80,5, 80,40, WHITE);  // Verticaly
+  display.drawLine(5,50, 123,50, WHITE); // Horizontal
+
+
+  // Temp int
+  display.setTextSize(2);
+  display.setCursor(1, 15);
+  display.print(temperature,1);
+  display.println(" C");
+
+  // Weather
+  // icon
+  uint8_t iconChar = getMeteoconIcon(Meteo.icon);
+
+  display.setTextSize(1);          // Set font size to defaut
+  display.setFont(&Weathericon);   // Change font
+  display.setCursor(95,22);        // Set on the upper right
+  display.write(iconChar);         // print char from 32 to 96
+  display.setFont();               // Set default font
+
+  // Temp
+  display.setCursor(90, 32); //was 85
+  display.print(Meteo.temp, 1);
+  display.print(" C");
+
+
+  // Lower line
+
+  // Time
+  display.setCursor(0,55);
+  String hours;
+  if ( timeClient.getHours() > 0 ) { hours = timeClient.getHours(); }
+  else { hours = "0"; hours += timeClient.getHours(); }
+
+  String minutes;
+  if ( timeClient.getMinutes() > 0 ) { minutes = timeClient.getMinutes(); }
+  else { minutes = "0"; minutes += timeClient.getMinutes(); }
+
+  display.print(hours); display.print(":"); display.print(minutes);
+
+  // IP
+  display.setTextSize(1);
+  display.setCursor(40,55);
+  display.print(ip);
+
+
+  display.display();
+
 }
+
 
 
 
@@ -1209,8 +1237,8 @@ void setup() {
   server.on("/api/history", webApiHistory);
   server.on("/api/historyClear", webApiHistoryClear);
   server.on("/api/forecast", webApiForecast);
-  server.on("/setting", webInitSetting);
-  server.on("/wifi", webInitRoot);
+  server.on("/setting", webWifiWrite);
+  server.on("/wifi", webWifiSetup);
 
   server.onNotFound(webNotFound);
   server.begin();
@@ -1229,41 +1257,12 @@ void setup() {
 
   if (internetConnection)
   {
-    display.println("- check update");
-    display.display();
-  
-    String updateUrl = UPDATE_URL;
-    Serial.println("Check for new update at : "); Serial.println(updateUrl);
-    ESPhttpUpdate.rebootOnUpdate(1);
-    t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, SOFT_VERSION);
-    //t_httpUpdate_return ret = ESPhttpUpdate.update(updateUrl, ESP.getSketchMD5() );
-
-    Serial.print("return : "); Serial.println(ret);
-    switch (ret) {
-      case HTTP_UPDATE_FAILED:
-        Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
-        break;
-
-      case HTTP_UPDATE_NO_UPDATES:
-        Serial.println("HTTP_UPDATE_NO_UPDATES");
-        break;
-
-      case HTTP_UPDATE_OK:
-        Serial.println("HTTP_UPDATE_OK");
-        break;
-
-      default:
-        Serial.print("Undefined HTTP_UPDATE Code: "); Serial.println(ret);
-    }
-    display.println("update done");
-    display.display();
+    // check update
+    updateCheck();
 
     // get time();
     timeClient.begin();
-    timeClient.update();
 
-    // old. maybe need to remove it
-    getTimeOnStartup();
     logger("Starting bicoqueTemp");
     String messageToLog = SOFT_VERSION ; messageToLog += " "; messageToLog += SOFT_DATE;
     logger(messageToLog);
@@ -1293,6 +1292,7 @@ void loop()
   {
     // check web client connections
     server.handleClient();
+    timeClient.update();
 
    // Check if we have a delay on wifi to disable it
    if (wifiActivationTempo > 0 )
@@ -1335,39 +1335,11 @@ void loop()
 
     float delta = temperature - temperatureOld;
     Serial.print("Delta temp : "); Serial.println(delta);
- 
 
     if (delta > 0.1 or delta < -0.1)
     {
       Serial.print(temperature);
       Serial.println("ºC");
-
-      display.clearDisplay();
-      display.setTextSize(2);
-      display.setTextColor(WHITE);
-      display.setCursor(1, 15);
-      // Display static text
-      display.print(temperature,1);
-      display.println(" C");
-      display.setTextSize(1);
-
-      // Time
-      display.setCursor(0,55);
-      String hours;
-      if ( timeClient.getHours() > 0 ) { hours = timeClient.getHours(); }
-      else { hours = "0"; hours += timeClient.getHours(); }
-
-      String minutes;
-      if ( timeClient.getMinutes() > 0 ) { minutes = timeClient.getMinutes(); }
-      else { minutes = "0"; minutes += timeClient.getMinutes(); }
-
-      display.print(hours); display.print(":"); display.print(minutes);
-
-      // IP
-      display.setTextSize(1);
-      display.setCursor(40,55);
-      display.print(ip);
-      display.display();
 
       temperatureOld = temperature;
     }
@@ -1381,12 +1353,16 @@ void loop()
     tempTimer = 0;
 
     // Get Info from openweathermap
-    openWeatherGet();
+    openWeatherGetWeather(Meteo);
 
-    testscrolltext();
- 
+    // testscrolltext();
+
+
   }
-  
+
+  // need to display the time  
+  screenDisplayMain();
+
   tempTimer++; 
   delay(100);
 }

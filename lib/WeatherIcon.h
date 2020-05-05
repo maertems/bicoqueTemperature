@@ -191,57 +191,43 @@ const GFXfont Weathericon PROGMEM = {
  (GFXglyph *)WeathericonGlyphs,
  32, 90, 22};
 
-/*
-const char* getMeteoconIconFromProgmem(String iconText) {
-  if (iconText == "01d" || iconText == "01n") return sunny;
-  if (iconText == "02d" || iconText == "02n") return partlysunny;
-  if (iconText == "03d" || iconText == "03n") return partlycloudy;
-  if (iconText == "04d" || iconText == "04n") return mostlycloudy;
-  if (iconText == "09d" || iconText == "09n") return rain;
-  if (iconText == "10d" || iconText == "10n") return rain;
-  if (iconText == "11d" || iconText == "11n") return tstorms;
-  if (iconText == "13d" || iconText == "13n") return snow;
-  if (iconText == "50d" || iconText == "50n") return fog;
-  return unknown;
-};
-*/
 
 uint8_t getMeteoconIcon(String icon) {
   // clear sky / sunny
-  if (icon == "01d") { return 66 ; } // "B"; } // 66
-  if (icon == "01n") { return 67 ; } // "C"; } // 67
+  if (icon == "01d") { return 66 ; } 
+  if (icon == "01n") { return 67 ; } 
 
   // few clouds / partlysunny
-  if (icon == "02d") { return 72 ; } // "H"; } // 72
-  if (icon == "02n") { return 73 ; } // "4"; } // 73 - 52
+  if (icon == "02d") { return 72 ; }
+  if (icon == "02n") { return 73 ; } // 52
 
   // scattered clouds / partlycloudy
-  if (icon == "03d") { return 78 ; } // "N"; } // 78
-  if (icon == "03n") { return 78 ; } // "5"; } // 78 - 53
+  if (icon == "03d") { return 78 ; }
+  if (icon == "03n") { return 78 ; } // 53
 
   // broken clouds / mostlycloudy
-  if (icon == "04d") { return 89 ; } // "Y"; } // 89
-  if (icon == "04n") { return 89 ; } // "%"; } // 89 - 37
+  if (icon == "04d") { return 89 ; } 
+  if (icon == "04n") { return 89 ; } // 37
 
   // shower rain / rain
-  if (icon == "09d") { return 82 ; } // "R"; } // 82
-  if (icon == "09n") { return 82 ; } // "8"; } // 82 - 56
+  if (icon == "09d") { return 82 ; } 
+  if (icon == "09n") { return 82 ; } //  56
 
   // rain / rain
-  if (icon == "10d") { return 81 ; } // "Q"; } // 81
-  if (icon == "10n") { return 81 ; } // "7"; } // 81 - 55
+  if (icon == "10d") { return 81 ; } 
+  if (icon == "10n") { return 81 ; } // 55
 
   // thunderstorm / tstorms
-  if (icon == "11d") { return 48 ; } // "P"; } // 48 - 80
-  if (icon == "11n") { return 48 ; } // "6"; } // 48 - 54
+  if (icon == "11d") { return 48 ; } // 80
+  if (icon == "11n") { return 48 ; } // 54
 
   // snow / snow
-  if (icon == "13d") { return 85 ; } // "W"; } // 85 - 87
-  if (icon == "13n") { return 85 ; } // "#"; } // 85 - 35
+  if (icon == "13d") { return 85 ; } // 87
+  if (icon == "13n") { return 85 ; } // 35
 
   // mist / fog
-  if (icon == "50d") { return 76 ; } // "M"; } // 76 - 77
-  if (icon == "50n") { return 76 ; } // "M"; } // 76 - 77
+  if (icon == "50d") { return 76 ; } // 77
+  if (icon == "50n") { return 76 ; } // 77
 
   // Nothing matched: N/A
   return 32 ; // ")";
