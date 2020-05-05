@@ -1,3 +1,16 @@
+/*
+
+Help from : 
+ https://github.com/ThingPulse/esp8266-weather-station
+ https://mcuoneclipse.com/2017/09/09/wifi-oled-mini-weather-station-with-esp8266/
+ https://how2electronics.com/weather-station-with-nodemcu-oled/
+ https://randomnerdtutorials.com/esp32-esp8266-plot-chart-web-server/
+
+
+Not yet :)
+ https://github.com/landru29/ovh_metrics_wemos/blob/master/metrics.cpp
+*/
+
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
@@ -10,6 +23,9 @@
 #include <ArduinoJson.h>
 #include <FS.h>
 
+// NTP
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 
 // OLED screen
 #include <SPI.h>
@@ -17,14 +33,24 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-
+// Weather
+#include "lib/WeatherIcon.h"
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.1.01"
-#define SOFT_DATE "2020-04-19"
+#define SOFT_VERSION "0.1.34"
+#define SOFT_DATE "2020-05-05"
 
 #define DEBUG 1
+
+// NTP Constant
+#define NTP_SERVER "ntp.ovh.net"
+#define NTP_TIME_ZONE 2         // GMT +2:00
+
+WiFiUDP ntpUDP;
+// params WifiUDP object / ntp server / timeZone in sec / request ntp every xx milisec
+NTPClient timeClient(ntpUDP, NTP_SERVER , (NTP_TIME_ZONE * 3600) , 86400000);
+
 
 //-- OneWire Configuration
 // GPIO where the DS18B20 is connected to
@@ -36,16 +62,21 @@ DallasTemperature sensors(&oneWire);
 
 
 //-- Screen Init
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+#define SCREEN_WIDTH 128   // OLED display width, in pixels
+#define SCREEN_HEIGHT 64   // OLED display height, in pixels
+#define SCREEN_RESET -1    // Reset pin # (or -1 if sharing Arduino reset pin)
+#define SCREEN_ROTATION 2  // 0 -> 0 / 1 -> 90 / 2 -> 180 / 3 -> 270 
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RESET);
+// FreeSans12pt7b.h FreeSans18pt7b.h FreeSans24pt7b.h FreeSans9pt7b.h
+
 
 
 // Init
 float temperatureOld = -255 ;
 float temperature;
-float temperatureAdjustement = 0.2;
+bool networkEnable      = 1;
+bool internetConnection = 0; 
+int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
 int tempTimer = 0;
 IPAddress ip;
 String dataJsonData;
@@ -56,14 +87,20 @@ long timeAtStarting = 0; // need to get from ntp server timestamp when ESP start
 
 // Wifi AP info for configuration
 const char* wifiApSsid = SOFT_NAME;
-const char* wifiApPasswd = "randomPass";
-String wifiSsid   = "";
-String wifiPasswd = "";
 
 
 // Update info
 #define BASE_URL "http://mangue.net/ota/esp/bicoqueTemperature/"
 #define UPDATE_URL "http://mangue.net/ota/esp/bicoqueTemperature/update.php"
+
+
+// OpenWeather Info
+// String owLocation   = "Saint-Andre-les-Lille, FR";
+String owLocationId  = "2981779";
+String owApiKey      = "647f72169b95765a6a67fcc452ce15d8";
+String owUrlBase     = "http://api.openweathermap.org/data/2.5/weather";
+//String owUrl         = String( owUrlBase + "?q=" + owLocation + "&APPID=" + owApiKey);
+String owUrl         = String( owUrlBase + "?id=" + owLocationId + "&APPID=" + owApiKey);
 
 
 // Web server info
@@ -97,6 +134,7 @@ config softConfig;
 
 
 
+
 //----------------
 //
 //
@@ -122,7 +160,7 @@ String storageRead(char *fileName)
     size_t sizeFile = file.size();
     if (sizeFile > 400)
     {
-      Serial.println("Size of file is too clarge");
+       Serial.println("Size of file is too clarge");
     }
     else
     {
@@ -144,19 +182,83 @@ bool storageWrite(char *fileName, String dataText)
   return true;
 }
 
+bool storageAppend(char *fileName, String dataText)
+{
+  File file = SPIFFS.open(fileName, "a");
+  file.print(dataText);
+  file.close();
+  return true;
+}
+
+bool storageClear(char *fileName)
+{
+  SPIFFS.remove(fileName);
+  return true;
+}
+
+void dataClear()
+{
+  storageClear("/data.csv");
+}
 
 void dataSave()
 {
-  dataJsonData = "";
-  serializeJson(jsonData, dataJsonData);
+  int timestamp = getTime();
+  String lineToLog = String(timestamp);
+  lineToLog += ",";
+  lineToLog += temperature;
+  lineToLog += "\n";
 
-  if (DEBUG) {
-    Serial.print("write consumption : ");
-    Serial.println(dataJsonData);
+  if (DEBUG) 
+  {
+    Serial.print("write temp : ");
+    Serial.print(lineToLog);
   }
 
-  storageWrite("/data.json", dataJsonData);
+  storageAppend("/data.csv", lineToLog);
 }
+
+void dataRead(String (&datas)[2])
+{
+  unsigned int lineNumber = 0;
+  
+  datas[0] = "[";
+  //datas[1] = "[";
+
+  File file = SPIFFS.open("/data.csv", "r");
+  while(file.available())  // we could open the file, so loop through it to find the record we require
+  {
+    lineNumber++;       
+    String time = file.readStringUntil(',');   // Read line by line from the file
+    String temp = file.readStringUntil('\n');  // Read line by line from the file
+
+    if (time.length() > 0)
+    {
+      if (lineNumber > 1)
+      {
+        datas[0] += ',';
+        // datas[1] += ',';
+      }
+
+      datas[0] += String( '[' + time + "000," + temp + ']');
+      // datas[0] += time;
+      // datas[1] += temp;
+    }
+
+    Serial.print("time : "); Serial.print(time); Serial.print(" / temp : "); Serial.println(temp);
+  }
+
+  datas[0] += "]";
+  // datas[1] += "]";
+
+  Serial.println(lineNumber);         // show line number of SPIFFS file
+  file.close(); 
+
+  //return &datas;
+}
+
+
+
 
 String configSerialize()
 {
@@ -164,7 +266,7 @@ String configSerialize()
   DynamicJsonDocument jsonConfig(800);
   JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
   JsonObject jsonConfigTemp = jsonConfig.createNestedObject("temp");
-  
+
   jsonConfig["alreadyStart"]   = softConfig.alreadyStart;
   jsonConfig["softName"]       = softConfig.softName;
   jsonConfigWifi["ssid"]       = softConfig.wifi.ssid;
@@ -182,7 +284,7 @@ bool configSave()
 {
   String dataJsonConfig = configSerialize();
   bool fnret = storageWrite("/config.json", dataJsonConfig);
-  
+
   if (DEBUG) 
   {
     Serial.print("write config : ");
@@ -197,9 +299,9 @@ bool configRead(config &ConfigTemp)
 {
   String dataJsonConfig;
   DynamicJsonDocument jsonConfig(800);
-  
+
   dataJsonConfig = storageRead("/config.json");
-  
+
   DeserializationError jsonError = deserializeJson(jsonConfig, dataJsonConfig);
   if (jsonError)
   {
@@ -219,7 +321,7 @@ bool configRead(config &ConfigTemp)
   ConfigTemp.temp.checkTimer = jsonConfig["temp"]["checkTimer"];
 
   return true;
-  
+
 }
 
 void configDump(config ConfigTemp)
@@ -273,7 +375,8 @@ long getTimeOnStartup()
 // ********************************************
 // WebServer
 // ********************************************
-void webRoot() {
+void webRoot() 
+{
   String message = "<!DOCTYPE HTML>";
   message += "<html>";
 
@@ -322,8 +425,22 @@ void webApiConfig()
 {
   String dataJsonConfig = configSerialize();
   server.send(200, "application/json", dataJsonConfig);
-
 }
+
+void webApiHistoryClear()
+{
+  dataClear();
+  server.send(200, "text/html", "done");
+}
+
+void webTemperature()
+{
+  server.send(200, "text/html", String(temperature));
+}
+
+
+
+
 void webNotFound() {
   String message = "File Not Found\n\n";
   message += "URI: ";
@@ -425,13 +542,13 @@ void webInitSetting()
 
 
 // Wifi
-bool wifiConnect(const char* ssid, const char* password)
+bool wifiConnectSsid(const char* ssid, const char* password)
 {
   Serial.println(ssid);
   WiFi.begin(ssid, password);
   int c = 0;
   Serial.println("Waiting for Wifi to connect");
-  while ( c < 20 ) {
+  while ( c < 80 ) {
     if (WiFi.status() == WL_CONNECTED) {
       return true;
     }
@@ -496,20 +613,73 @@ int wifiPower()
   int dBm = WiFi.RSSI();
   int quality;
   // dBm to Quality:
-  if (dBm <= -100)
-  {
-    quality = 0;
-  }
-  else if (dBm >= -50)
-  {
-    quality = 100;
-  }
-  else
-  {
-    quality = 2 * (dBm + 100);
-  }
+  if (dBm <= -100)     { quality = 0; }
+  else if (dBm >= -50) { quality = 100; }
+  else                 { quality = 2 * (dBm + 100); }
 
   return quality;
+}
+bool wifiConnect(String ssid, String password)
+{
+    if ( DEBUG ) { Serial.println("Enter wifi config"); }
+    display.println("- wifi settings");
+    display.display();
+
+    // Try connecting to SSID
+    display.println(" - connecting... ");
+    display.print(" ");
+    display.print(ssid);
+    display.display();
+
+    if (DEBUG) { Serial.print("Wifi: Connecting to '"); Serial.print(ssid); Serial.println("'"); }
+
+    // Unconnect from AP
+    WiFi.mode(WIFI_AP);
+    WiFi.disconnect();
+
+    // Connecting to SSID
+    WiFi.mode(WIFI_STA);
+    WiFi.hostname(SOFT_NAME);
+
+    bool wifiConnected = wifiConnectSsid(ssid.c_str(), password.c_str());
+
+    if (wifiConnected)
+    {
+      if (DEBUG) { Serial.println("WiFi connected"); }
+      internetConnection = 1;
+
+      display.println(" .. ok");
+      display.display();
+  
+      ip = WiFi.localIP();
+
+      return true;
+    }
+    else
+    {
+      display.println(" .. KO");
+      display.display();
+    }
+
+    // If SSID connection failed. Go into AP mode
+    display.println(" - standalone mode");
+    display.display();
+
+    // Disconnecting from Standard Mode
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+
+    // Connect to AP mode
+    WiFi.mode(WIFI_AP);
+    WiFi.hostname(SOFT_NAME);
+
+    if (DEBUG) { Serial.println("Wifi config not present. set AP mode"); }
+    WiFi.softAP(wifiApSsid);
+    if (DEBUG) {Serial.println("softap"); }
+
+    ip = WiFi.softAPIP();
+
+    return false;
 }
 
 
@@ -556,7 +726,7 @@ String urlencode(String str)
 
 void logger(String message)
 {
-  if (softConfig.wifi.enable)
+  if (internetConnection)
   {
     HTTPClient httpClient;
     String urlTemp = BASE_URL;
@@ -569,7 +739,327 @@ void logger(String message)
   }
 }
 
+void webApiHistory()
+{
+  String datas[2];
+  dataRead(datas);
 
+  String message;
+
+  message = datas[0];
+  message += "\n";
+  message += datas[1];
+  message += "\n";
+
+  server.send(200, "text/html", message);
+}
+
+void webDisplay()
+{
+  String message;
+  String qchar = server.arg("char");
+
+  if (qchar != "")
+  {
+    uint8_t i = qchar.toInt();
+    // Display Char on screen
+    display.clearDisplay();
+    display.setTextSize(1);            // Set font size to defaut
+    display.setTextColor(WHITE);
+    display.setFont(&Weathericon);        // Change font
+
+    display.setCursor(80,20);    // Just cause Icon are pretty "big"
+    display.write(i);
+    display.display();
+    display.setFont();
+  }
+
+  message = "<!DOCTYPE HTML>";
+  message += "<html>";
+
+  message += SOFT_NAME;
+  message += "<br><br>\n";
+
+  message += "Debug : <br>\n";
+  message += "<p>\n";
+  message += "</p>\n<form method='get' action='display'><label>Char to display (32-96) : </label><input name='char' length=2><input type='submit'></form>\n";
+  message += "</html>\n";
+  server.send(200, "text/html", message);
+}
+
+
+void testscrolltext(void) 
+{
+  String message = "un texte qui est tres long et qui depasse";
+  int x, minX;
+  x = display.width();
+  minX = -12 * message.length();
+
+  // loop
+  for( int i = 0; i < 400; i++)
+  {
+    // Clear line
+    display.fillRect(0, 54, 128, 64, BLACK);
+
+    display.setCursor(x, 56);
+    display.print(message);
+    display.display();
+    x=x-1;
+  }
+
+}
+
+
+
+// -----------------
+// OpenWeather
+// -----------------
+void webApiForecast()
+{
+  HTTPClient http; //Declare an object of class HTTPClient
+  http.begin(owUrl);
+  int httpCode = http.GET(); // send the request
+
+  String message;
+
+  if (httpCode > 0) // check the returning code
+  {
+    String payload = http.getString(); //Get the request response payload
+    http.end(); //Close connection
+
+    message = payload;
+
+    DynamicJsonDocument root(4096);
+
+    // Parse JSON object
+    DeserializationError jsonError = deserializeJson(root, payload);
+    if (jsonError)
+    {
+      Serial.println("Got Error when deserialization : "); //Serial.println(jsonError);
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(jsonError.c_str());
+ 
+      server.send(200, "text/html", jsonError.c_str());
+
+      return;
+      // Getting error when deserialise... I don know what to do here...
+    }
+  }
+
+
+  server.send(200, "text/html", message);  
+}
+
+
+void openWeatherGet()
+{
+  HTTPClient http; //Declare an object of class HTTPClient
+  http.begin(owUrl);
+  int httpCode = http.GET(); // send the request
+
+  
+  if (httpCode > 0) // check the returning code
+  {
+    String payload = http.getString(); //Get the request response payload
+
+    DynamicJsonDocument root(4096);
+
+    // Parse JSON object
+    DeserializationError jsonError = deserializeJson(root, payload);
+    if (jsonError)
+    {
+      Serial.println("Got Error when deserialization : "); //Serial.println(jsonError);
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(jsonError.c_str());
+      return;
+      // Getting error when deserialise... I don know what to do here...
+    }
+
+   // {"coord":{"lon":3.05,"lat":50.67},
+   // "weather":[{"id":804,"main":"Clouds","description":"overcast clouds","icon":"04d"}],
+   // "base":"stations",
+   // "main":{"temp":285.04,"feels_like":279.19,"temp_min":283.71,"temp_max":286.48,"pressure":1019,"humidity":62},
+   // "visibility":10000,
+   // "wind":{"speed":6.7,"deg":50},
+   // "clouds":{"all":97},
+   // "dt":1588672109,
+   // "sys":{"type":1,"id":6559,"country":"FR","sunrise":1588652067,"sunset":1588706065},
+   // "timezone":7200,
+   // "id":2981779,
+   // "name":"Saint-André-lez-Lille"
+   // ,"cod":200}
+
+
+    float temp       = (float)(root["main"]["temp"]) - 273.15; // get temperature in °C
+    int humidity     = root["main"]["humidity"];               // get humidity in %
+    float wind_speed = root["wind"]["speed"];                  // get wind speed in m/s
+    int wind_degree  = root["wind"]["deg"];                    // get wind degree in °
+    String icon      = root["weather"][0]["icon"]; 
+
+    uint8_t iconChar = getMeteoconIcon(icon);
+
+    // print data
+    Serial.printf("Temperature = %.2f°C\r\n", temp);
+    Serial.printf("Humidity = %d %%\r\n", humidity);
+    Serial.printf("Wind speed = %.1f m/s\r\n", wind_speed);
+    Serial.printf("Wind degree = %d°\r\n\r\n", wind_degree);
+
+    // draw line
+    display.drawLine(80,5, 80,40, WHITE); // Verticaly
+    display.drawLine(5,50, 123,50, WHITE); // Horizontal
+
+    // icon
+    display.setTextSize(1);            // Set font size to defaut
+    display.setTextColor(WHITE);
+    display.setFont(&Weathericon);        // Change font
+    display.setCursor(95,22);    // Just cause Icon are pretty "big"
+    display.write(iconChar);
+    display.setFont();
+
+    display.setCursor(90, 32); //was 85
+    display.print(temp, 1);
+    display.print(" C");
+    // display.drawRect(109, 24, 3, 3, WHITE); // put degree symbol ( ° )
+    // display.drawRect(97, 56, 3, 3, WHITE);
+    display.display();
+
+  }
+
+  http.end(); //Close connection
+}
+
+
+
+
+
+
+
+
+
+
+// Test
+void web_index()
+{
+
+  // Get historic from file
+  String datas[2];
+  dataRead(datas);
+
+
+  String index_html = R"rawliteral( 
+<!DOCTYPE HTML><html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+  <script src="https://code.highcharts.com/highcharts.js"></script>
+  <style>
+    html {
+     font-family: Arial;
+     display: inline-block;
+     margin: 0px auto;
+     text-align: center;
+    }
+    h2 { font-size: 3.0rem; }
+    p { font-size: 3.0rem; }
+    .units { font-size: 1.2rem; }
+    .dht-labels{
+      font-size: 1.5rem;
+      vertical-align:middle;
+      padding-bottom: 15px;
+    }
+  </style>
+</head>
+<body>
+  <h2>My Home</h2>
+  <p>
+    <i class="fas fa-thermometer-half" style="color:#059e8a;"></i> 
+    <span class="dht-labels">Salon</span> 
+    <span id="temperature">)rawliteral";
+index_html += temperature;
+index_html += R"rawliteral(</span>
+    <sup class="units">&deg;C</sup>
+  </p>
+  <p>
+  <div id="chart-temperature" class="container"></div>
+  </p>
+</body>
+
+
+<script>
+
+var chartT = new Highcharts.Chart({
+  chart:{ renderTo : 'chart-temperature', zoomType: 'x' },
+  title: { text: 'History' },
+  series: [{
+    showInLegend: false,
+    data: )rawliteral";
+index_html += datas[0];
+index_html += R"rawliteral(
+  }],
+  plotOptions: {
+    fillColor: {
+      linearGradient: {
+            x1: 0,
+            y1: 0,
+            x2: 0,
+            y2: 1
+        },
+        stops: [
+            [0, Highcharts.getOptions().colors[0]],
+            [1, Highcharts.color(Highcharts.getOptions().colors[0]).setOpacity(0).get('rgba')]
+        ]
+    },
+    marker: {
+        radius: 2
+      },
+    lineWidth: 1,
+    states: {
+        hover: {
+            lineWidth: 1
+        }
+    },
+    threshold: null,
+    series: { color: '#059e8a' }
+  },
+  xAxis: { type: 'datetime',
+    dateTimeLabelFormats: { second: '%H:%M:%S' },
+  },
+  yAxis: {
+    title: { text: 'Temperature (Celsius)' }
+  },
+  credits: { enabled: false }
+});
+
+
+
+setInterval(function ( ) {
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      document.getElementById("temperature").innerHTML = this.responseText;
+    }
+  };
+  xhttp.open("GET", "/temperature", true);
+  xhttp.send();
+}, 10000 ) ;
+
+</script>
+</html>)rawliteral";
+
+  server.send(200, "text/html", index_html);
+}
+
+
+// Replaces placeholder with DHT values
+String processor(const String& var)
+{
+  //Serial.println(var);
+  if(var == "TEMPERATURE")
+  {
+    return String(temperature);
+  }
+  return String();
+}
 
 
 
@@ -602,17 +1092,18 @@ void setup() {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
   }
-
   delay(2000);
+
+  // Init Display
+  display.setRotation(SCREEN_ROTATION);
   display.clearDisplay();
 
+  // First display
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 10);
-  // Display static text
-  display.println("Booting...");
-  display.setCursor(0,40);
-  display.print("v"); display.print(SOFT_VERSION);
+  display.setCursor(0, 0);
+  display.print("Booting... v");
+  display.println(SOFT_VERSION);
   display.display(); 
 
 
@@ -689,115 +1180,58 @@ void setup() {
   }
 
 
-  if (softConfig.alreadyStart == 0 && softConfig.wifi.enable == 0)
-  {
-    softConfig.wifi.enable = 1;
-  }
+  internetConnection = wifiConnect(softConfig.wifi.ssid, softConfig.wifi.password);
 
-
-  int wifiMode = 0;
-  String wifiList;
   if (softConfig.wifi.enable)
   {
-    Serial.println("Enter wifi config");
-    display.clearDisplay();
-    display.setCursor(0,10);
-    display.println("wifi settings");
-
-    if (softConfig.wifi.ssid.length() > 0)
-    {
-      display.println("   connecting...");
-      Serial.print("Wifi: Connecting to -");
-      Serial.print(softConfig.wifi.ssid); Serial.println("-");
-
-      // Connecting to wifi
-      WiFi.mode(WIFI_AP);
-      WiFi.disconnect();
-      WiFi.mode(WIFI_STA);
-      WiFi.hostname(wifiApSsid);
-
-      const char * login = softConfig.wifi.ssid.c_str();
-      const char * pass  = softConfig.wifi.password.c_str();
-      bool wifiConnected = wifiConnect(login, pass);
-
-      if (wifiConnected)
-      {
-        Serial.println("WiFi connected");
-        wifiMode = 1;
-
-        display.println(" .. ok");
-      }
-      else
-      {
-        Serial.println("Can't connect to Wifi. disactive webserver");
-        softConfig.wifi.enable = 0;
-      }
-    }
-    else
-    {
-      display.println("   standalone mode");
-      WiFi.mode(WIFI_STA);
-      WiFi.disconnect();
-      WiFi.mode(WIFI_AP);
-      WiFi.hostname(wifiApSsid);
-      Serial.println("Wifi config not present. set AP mode");
-      WiFi.softAP(wifiApSsid, wifiApPasswd, 6);
-      Serial.println("softap");
-      wifiMode = 2;
-
-      display.println("  ko");
-    }
+    wifiActivationTempo = 0;
   }
   else
   {
-    Serial.println("Wifi desactivated");
-    WiFi.mode(WIFI_OFF);
-
-    display.println(" ..off");
-    delay(2000);
+    if (DEBUG) { Serial.println("Deactive wifi in 5 mins."); }
+    wifiActivationTempo = 600;
   }
 
   Serial.println("End of wifi config");
 
-  if (softConfig.wifi.enable)
+  // Start the server
+  display.println("- load webserver");
+
+  //server.on("/", webRoot);
+  server.on("/", web_index);
+  server.on("/reload", webReload);
+  server.on("/write", webWrite);
+  server.on("/debug", webDebug);
+  server.on("/reboot", webReboot);
+  server.on("/display", webDisplay);
+  server.on("/temperature", webTemperature);
+  server.on("/api/config", webApiConfig);
+  server.on("/api/history", webApiHistory);
+  server.on("/api/historyClear", webApiHistoryClear);
+  server.on("/api/forecast", webApiForecast);
+  server.on("/setting", webInitSetting);
+  server.on("/wifi", webInitRoot);
+
+  server.onNotFound(webNotFound);
+  server.begin();
+
+  if (DEBUG)
   {
-    // Start the server
-    display.clearDisplay();
-    display.setCursor(0,10);
-    display.print("load webserver");
-
-    if (wifiMode == 1) // normal mode
-    {
-      server.on("/", webRoot);
-      server.on("/reload", webReload);
-      server.on("/write", webWrite);
-      server.on("/debug", webDebug);
-      server.on("/reboot", webReboot);
-      server.on("/api/config", webApiConfig);
-      server.on("/setting", webInitSetting);
-      ip = WiFi.localIP();
-    }
-    else if (wifiMode == 2) // AP mode for config
-    {
-      server.on("/", webInitRoot);
-      server.on("/setting", webInitSetting);
-      ip = WiFi.softAPIP();
-    }
-    server.onNotFound(webNotFound);
-    server.begin();
-
     Serial.print("Http: Server started at http://");
     Serial.print(ip);
     Serial.println("/");
     Serial.print("Status : ");
     Serial.println(WiFi.RSSI());
+  }
 
-    delay(1000);
+  delay(1000);
 
-    display.clearDisplay();
-    display.setCursor(0,10);
-    display.println("check update");
 
+  if (internetConnection)
+  {
+    display.println("- check update");
+    display.display();
+  
     String updateUrl = UPDATE_URL;
     Serial.println("Check for new update at : "); Serial.println(updateUrl);
     ESPhttpUpdate.rebootOnUpdate(1);
@@ -822,8 +1256,13 @@ void setup() {
         Serial.print("Undefined HTTP_UPDATE Code: "); Serial.println(ret);
     }
     display.println("update done");
+    display.display();
 
     // get time();
+    timeClient.begin();
+    timeClient.update();
+
+    // old. maybe need to remove it
     getTimeOnStartup();
     logger("Starting bicoqueTemp");
     String messageToLog = SOFT_VERSION ; messageToLog += " "; messageToLog += SOFT_DATE;
@@ -831,9 +1270,11 @@ void setup() {
   }
 
   
-  display.clearDisplay();
-  display.setCursor(0,10);
-  display.print("Init ended.. starting");
+  display.println("Init ended.. starting");
+  display.display();
+
+  // Need to display when booting
+  tempTimer = softConfig.temp.checkTimer + 1000;
 }
 
 
@@ -848,35 +1289,84 @@ void loop()
   // We check Temp every X sec
 
 
-
-  // check web client connections
-  if (softConfig.wifi.enable)
+  if (networkEnable)
   {
+    // check web client connections
     server.handleClient();
+
+   // Check if we have a delay on wifi to disable it
+   if (wifiActivationTempo > 0 )
+   {
+      if (wifiActivationTempo > (millis() / 1000) )
+      {
+        if (softConfig.wifi.enable)
+        {
+          // try to reconnect evry 5 mins
+	  internetConnection = wifiConnect(softConfig.wifi.ssid, softConfig.wifi.password);
+ 
+          if (internetConnection)
+          {
+            wifiActivationTempo = 0;
+          }
+          else
+          {
+            wifiActivationTempo = (millis() / 1000) + 600;
+          }
+        }
+        else
+        {
+          // Need to de-active wifi
+          WiFi.mode(WIFI_OFF);
+          WiFi.disconnect();
+
+          wifiActivationTempo = 0;
+          networkEnable       = 0;
+        }
+      }
+   }
   }
 
 
-  if (tempTimer > softConfig.temp.checkTimer)
+  if (tempTimer > (softConfig.temp.checkTimer * 10) )
   {
     // Get sensor from 1wire
     sensors.requestTemperatures(); 
-    temperature = sensors.getTempCByIndex(0) + temperatureAdjustement;
+    temperature = sensors.getTempCByIndex(0) + softConfig.temp.adjustment;
 
     float delta = temperature - temperatureOld;
     Serial.print("Delta temp : "); Serial.println(delta);
-  
+ 
+
     if (delta > 0.1 or delta < -0.1)
     {
       Serial.print(temperature);
       Serial.println("ºC");
 
       display.clearDisplay();
-      display.setTextSize(3);
+      display.setTextSize(2);
       display.setTextColor(WHITE);
-      display.setCursor(10, 25);
+      display.setCursor(1, 15);
       // Display static text
       display.print(temperature,1);
       display.println(" C");
+      display.setTextSize(1);
+
+      // Time
+      display.setCursor(0,55);
+      String hours;
+      if ( timeClient.getHours() > 0 ) { hours = timeClient.getHours(); }
+      else { hours = "0"; hours += timeClient.getHours(); }
+
+      String minutes;
+      if ( timeClient.getMinutes() > 0 ) { minutes = timeClient.getMinutes(); }
+      else { minutes = "0"; minutes += timeClient.getMinutes(); }
+
+      display.print(hours); display.print(":"); display.print(minutes);
+
+      // IP
+      display.setTextSize(1);
+      display.setCursor(40,55);
+      display.print(ip);
       display.display();
 
       temperatureOld = temperature;
@@ -886,9 +1376,17 @@ void loop()
       Serial.print("No change");
     }
 
+    // log all temeratures
+    dataSave();
     tempTimer = 0;
+
+    // Get Info from openweathermap
+    openWeatherGet();
+
+    testscrolltext();
+ 
   }
   
   tempTimer++; 
-  delay(1000);
+  delay(100);
 }
