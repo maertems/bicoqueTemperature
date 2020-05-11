@@ -1041,7 +1041,7 @@ setInterval(function ( ) {
 // DISPLAY Screen
 void screenDisplayMain()
 {
-  if (DEBUG)
+  if (DEBUG and 1 == 0)  // too much log on serial
   {
     Serial.println("List of thing to print on display :");
     Serial.print("temperature : "); Serial.println(temperature);
@@ -1312,8 +1312,6 @@ void loop()
 
   if (networkEnable)
   {
-    wifiConnect(softConfig.wifi.ssid, softConfig.wifi.password);
-
     // check web client connections
     server.handleClient();
     timeClient.update();
@@ -1393,7 +1391,3 @@ void loop()
 
   delay(sleepDelay * 1000);
 }
-
-
-
-
