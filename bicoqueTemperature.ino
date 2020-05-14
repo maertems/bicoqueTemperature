@@ -38,8 +38,8 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.1.37"
-#define SOFT_DATE "2020-05-10"
+#define SOFT_VERSION "0.1.45"
+#define SOFT_DATE "2020-05-14"
 
 #define DEBUG 1
 
@@ -78,11 +78,9 @@ bool networkEnable      = 1;
 bool internetConnection = 0; 
 int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
 int tempTimer = 0;
+int tempTimerOw = 0;
+int tempTimerHour = 3600;
 IPAddress ip;
-String dataJsonData;
-DynamicJsonDocument jsonData(200);
-// Time
-long timeAtStarting = 0; // need to get from ntp server timestamp when ESP start
 
 
 // Wifi AP info for configuration
@@ -95,10 +93,7 @@ const char* wifiApSsid = SOFT_NAME;
 
 
 // OpenWeather Info
-String owLocationId  = "2981779";
-String owApiKey      = "647f72169b95765a6a67fcc452ce15d8";
 String owUrlBase     = "http://api.openweathermap.org/data/2.5/weather";
-String owUrl         = String( owUrlBase + "?id=" + owLocationId + "&APPID=" + owApiKey);
 
 
 // Web server info
@@ -116,11 +111,20 @@ typedef struct configTemp
 {
   float adjustment;
   int checkTimer;
+  String owLocationId;
+  int owCheckTimer;
+  String owApiKey;
+};
+typedef struct configCloud
+{
+  String url;
+  String apiKey;
 };
 typedef struct config
 {
   configWifi wifi;
   configTemp temp;
+  configCloud cloud;
   boolean alreadyStart;
   String softName;
 };
@@ -222,6 +226,114 @@ void dataSave()
   storageAppend("/data.csv", lineToLog);
 }
 
+void dataArchive()
+{
+  bool conitnueLoop        = 0;
+  unsigned int lineToStart = 1;
+
+  do {
+    conitnueLoop            = 0;
+    unsigned int lineNumber = 0;
+    float temperatureTemp   = 0;
+    unsigned int lastTimestamp;
+    unsigned int firstTimestamp;
+
+    File file = SPIFFS.open("/data.csv", "r");
+    while(file.available())  // we could open the file, so loop through it to find the record we require
+    {
+      lineNumber++;
+
+      if (lineToStart <= lineNumber)
+      {
+        String time = file.readStringUntil(',');   // Read line by line from the file
+        String temp = file.readStringUntil('\n');  // Read line by line from the file
+
+        if (time.length() > 0)
+        {
+          if (lineToStart = lineNumber)
+          {
+            firstTimestamp = time.toInt();
+          }
+
+          lastTimestamp    = time.toInt();
+          if (lastTimestamp - firstTimestamp > 3600)
+	  {
+            lineToStart  = lineNumber;
+            lineNumber--;
+            conitnueLoop = 1;
+	    break;
+          }
+          
+          temperatureTemp += temp.toFloat();
+        }
+      }
+    }
+    file.close();
+
+    temperatureTemp = temperatureTemp / lineNumber; // get moyen
+
+    String lineToLog = String(lastTimestamp);
+    lineToLog += ",";
+    lineToLog += temperatureTemp;
+    lineToLog += "\n";
+
+    if (DEBUG)
+    {
+      Serial.print("Archive temp : ");
+      Serial.print(lineToLog);
+    }
+
+    storageAppend("/history.csv", lineToLog);
+  } while (conitnueLoop);
+
+
+  // remove data
+  dataClear();
+}
+
+
+void dataStats(int timeNow)
+{
+  int firstTimestamp;
+  String lastTimestamp;
+  bool firstLine = 1;
+  unsigned int lineNumber = 0;
+
+  File file = SPIFFS.open("/data.csv", "r");
+  while(file.available())  // we could open the file, so loop through it to find the record we require
+  {
+    lineNumber++;
+    String time = file.readStringUntil(',');   // Read line by line from the file
+
+    if (firstLine == 1)
+    {
+      firstTimestamp = time.toInt();
+      firstLine      = 0;
+    }
+
+    lastTimestamp = time;
+  }
+
+  if (DEBUG)
+  {
+    Serial.println("Data Stats :");
+    Serial.print("First Timestamp : "); Serial.println(firstTimestamp); 
+    Serial.print("Last Timestamp : "); Serial.println(lastTimestamp); 
+    Serial.print("lineNumber : "); Serial.println(lineNumber); 
+  }
+
+  // Check if we need to archive datas
+  if ((timeNow - firstTimestamp) > 3600)
+  {
+    dataArchive();
+  }
+
+}
+
+
+
+
+
 void dataRead(String (&datas)[2])
 {
   unsigned int lineNumber = 0;
@@ -229,7 +341,7 @@ void dataRead(String (&datas)[2])
   datas[0] = "[";
   //datas[1] = "[";
 
-  File file = SPIFFS.open("/data.csv", "r");
+  File file = SPIFFS.open("/history.csv", "r");
   while(file.available())  // we could open the file, so loop through it to find the record we require
   {
     lineNumber++;       
@@ -268,16 +380,22 @@ String configSerialize()
 {
   String dataJsonConfig;
   DynamicJsonDocument jsonConfig(800);
-  JsonObject jsonConfigWifi = jsonConfig.createNestedObject("wifi");
-  JsonObject jsonConfigTemp = jsonConfig.createNestedObject("temp");
+  JsonObject jsonConfigWifi  = jsonConfig.createNestedObject("wifi");
+  JsonObject jsonConfigTemp  = jsonConfig.createNestedObject("temp");
+  JsonObject jsonConfigCloud = jsonConfig.createNestedObject("cloud");
 
-  jsonConfig["alreadyStart"]   = softConfig.alreadyStart;
-  jsonConfig["softName"]       = softConfig.softName;
-  jsonConfigWifi["ssid"]       = softConfig.wifi.ssid;
-  jsonConfigWifi["password"]   = softConfig.wifi.password;
-  jsonConfigWifi["enable"]     = softConfig.wifi.enable;
-  jsonConfigTemp["adjustment"] = softConfig.temp.adjustment;
-  jsonConfigTemp["checkTimer"] = softConfig.temp.checkTimer;
+  jsonConfig["alreadyStart"]     = softConfig.alreadyStart;
+  jsonConfig["softName"]         = softConfig.softName;
+  jsonConfigWifi["ssid"]         = softConfig.wifi.ssid;
+  jsonConfigWifi["password"]     = softConfig.wifi.password;
+  jsonConfigWifi["enable"]       = softConfig.wifi.enable;
+  jsonConfigTemp["adjustment"]   = softConfig.temp.adjustment;
+  jsonConfigTemp["checkTimer"]   = softConfig.temp.checkTimer;
+  jsonConfigTemp["owLocationId"] = softConfig.temp.owLocationId;
+  jsonConfigTemp["owCheckTimer"] = softConfig.temp.owCheckTimer;
+  jsonConfigTemp["owApiKey"]     = softConfig.temp.owApiKey;
+  jsonConfigCloud["apiKey"]      = softConfig.cloud.apiKey;
+  jsonConfigCloud["url"]         = softConfig.cloud.url;
   serializeJson(jsonConfig, dataJsonConfig);
 
   return dataJsonConfig;
@@ -316,13 +434,18 @@ bool configRead(config &ConfigTemp)
     // Getting error when deserialise... I don know what to do here...
   }
 
-  ConfigTemp.alreadyStart    = jsonConfig["alreadyStart"];
-  ConfigTemp.softName        = jsonConfig["softName"].as<String>();
-  ConfigTemp.wifi.ssid       = jsonConfig["wifi"]["ssid"].as<String>();
-  ConfigTemp.wifi.password   = jsonConfig["wifi"]["password"].as<String>();
-  ConfigTemp.wifi.enable     = jsonConfig["wifi"]["enable"];
-  ConfigTemp.temp.adjustment = jsonConfig["temp"]["adjustment"];
-  ConfigTemp.temp.checkTimer = jsonConfig["temp"]["checkTimer"];
+  ConfigTemp.alreadyStart      = jsonConfig["alreadyStart"];
+  ConfigTemp.softName          = jsonConfig["softName"].as<String>();
+  ConfigTemp.wifi.ssid         = jsonConfig["wifi"]["ssid"].as<String>();
+  ConfigTemp.wifi.password     = jsonConfig["wifi"]["password"].as<String>();
+  ConfigTemp.wifi.enable       = jsonConfig["wifi"]["enable"];
+  ConfigTemp.temp.adjustment   = jsonConfig["temp"]["adjustment"];
+  ConfigTemp.temp.checkTimer   = jsonConfig["temp"]["checkTimer"];
+  ConfigTemp.temp.owLocationId = jsonConfig["temp"]["owLocationId"].as<String>();
+  ConfigTemp.temp.owCheckTimer = jsonConfig["temp"]["owCheckTimer"];
+  ConfigTemp.temp.owApiKey     = jsonConfig["temp"]["owApiKey"].as<String>();
+  ConfigTemp.cloud.apiKey      = jsonConfig["cloud"]["apiKey"].as<String>();
+  ConfigTemp.cloud.url         = jsonConfig["cloud"]["url"].as<String>();
 
   return true;
 
@@ -337,6 +460,12 @@ void configDump(config ConfigTemp)
   Serial.println("Temp data :");
   Serial.print("  - adjustment : "); Serial.println(ConfigTemp.temp.adjustment);
   Serial.print("  - checkTimer : "); Serial.println(ConfigTemp.temp.checkTimer);
+  Serial.print("  - owLocationId : "); Serial.println(ConfigTemp.temp.owLocationId);
+  Serial.print("  - owCheckTimer : "); Serial.println(ConfigTemp.temp.owCheckTimer);
+  Serial.print("  - owApiKey : "); Serial.println(ConfigTemp.temp.owApiKey);
+  Serial.println("Cloud data :");
+  Serial.print("  - apiKey : "); Serial.println(ConfigTemp.cloud.apiKey);
+  Serial.print("  - url : "); Serial.println(ConfigTemp.cloud.url);
   Serial.println("General data :");
   Serial.print("  - alreadyStart : "); Serial.println(ConfigTemp.alreadyStart);
   Serial.print("  - softName : "); Serial.println(ConfigTemp.softName);
@@ -496,10 +625,13 @@ bool wifiConnect(String ssid, String password)
 // --------------------------------
 // Update
 // --------------------------------
-void updateCheck()
+void updateCheck(bool displayScreen)
 {
-    display.println("- check update");
-    display.display();
+    if (displayScreen)
+    {
+      display.println("- check update");
+      display.display();
+    }
 
     String updateUrl = UPDATE_URL;
     Serial.println("Check for new update at : "); Serial.println(updateUrl);
@@ -524,8 +656,12 @@ void updateCheck()
       default:
         Serial.print("Undefined HTTP_UPDATE Code: "); Serial.println(ret);
     }
-    display.println("update done");
-    display.display();
+
+    if (displayScreen)
+    {
+      display.println("update done");
+      display.display();
+    }
 }
 
 
@@ -590,6 +726,55 @@ void logger(String message)
   }
 }
 
+bool dataPut(String type, float temp, unsigned int timestamp)
+{
+  if (internetConnection)
+  {
+    if (softConfig.cloud.url != "" and softConfig.cloud.apiKey != "")
+    {
+      HTTPClient httpClient;
+      String urlTemp = softConfig.cloud.url;
+      urlTemp += "/update.php?secret=";
+      urlTemp += softConfig.cloud.apiKey;
+      urlTemp += "&type=";
+      urlTemp += type;
+      urlTemp += "&temp=";
+      urlTemp += temp;
+      urlTemp += "&timestamp=";
+      urlTemp += timestamp;
+
+      //String url = urlencode(urlTemp);
+      String url = urlTemp;
+
+      if (DEBUG)
+      {
+        Serial.print("dataPush : Url for external use : "); Serial.println(url);
+      }
+
+      httpClient.begin(url);
+      httpClient.GET();
+      httpClient.end();
+
+      return 1;
+    }
+    else
+    {
+      if (DEBUG)
+      {
+        Serial.println("dataPush : Missing either cloud.url or cloud.apiKey");
+      }
+    }
+  }
+  else
+  {
+    if (DEBUG)
+    {
+      Serial.println("dataPush : No internet connection");
+    }
+    return 0;
+  }
+}
+
 
 
 
@@ -621,6 +806,19 @@ void testscrolltext(void)
 // -----------------
 String openWeatherCall()
 {
+
+  if (softConfig.temp.owLocationId == "")
+  {
+    return "{}";
+  }
+
+  if (softConfig.temp.owApiKey == "")
+  {
+    return "{}";
+  }
+
+  String owUrl = String( owUrlBase + "?id=" + softConfig.temp.owLocationId + "&APPID=" + softConfig.temp.owApiKey );
+
   HTTPClient http; //Declare an object of class HTTPClient
   http.begin(owUrl);
   int httpCode = http.GET(); // send the request
@@ -736,6 +934,8 @@ void webDebug()
   message += "<br><br>\n";
   message += "<form action='/write' method='GET'>Adjustment  : <input type=text name=adjustment><input type=submit></form><br>\n";
   message += "<form action='/write' method='GET'>Check Timer : <input type=text name=checkTimer><input type=submit></form><br>\n";
+  message += "<form action='/write' method='GET'>OpenWeather Check Timer : <input type=text name=owCheckTimer><input type=submit></form><br>\n";
+  message += "<form action='/write' method='GET'>OpenWeather Location ID : <input type=text name=owLocationId><input type=submit></form><br>\n";
   message += "<br><br>\n";
   message += "<a href='/reboot'>Rebbot device</a><br>\n";
   message += "</html>\n";
@@ -792,8 +992,14 @@ void webWrite()
 {
   String message;
 
-  String adjustment  = server.arg("adjustment");
-  String checkTimer  = server.arg("checkTimer");
+  String adjustment    = server.arg("adjustment");
+  String checkTimer    = server.arg("checkTimer");
+  String owLocationId  = server.arg("owLocationId");
+  String owCheckTimer  = server.arg("owCheckTimer");
+  String owApiKey      = server.arg("owApiKey");
+  String cloudUrl      = server.arg("cloudUrl");
+  String cloudApiKey   = server.arg("cloudApiKey");
+
   String wifiEnable  = server.arg("wifienable");
   String alreadyBoot = server.arg("alreadyboot");
 
@@ -818,6 +1024,31 @@ void webWrite()
   if (checkTimer != "")
   {
     softConfig.temp.checkTimer = checkTimer.toInt();
+    configSave();
+  }
+  if (owCheckTimer != "")
+  {
+    softConfig.temp.owCheckTimer = owCheckTimer.toInt();
+    configSave();
+  }
+  if (owLocationId != "")
+  {
+    softConfig.temp.owLocationId = owLocationId;
+    configSave();
+  }
+  if (owApiKey != "")
+  {
+    softConfig.temp.owApiKey = owApiKey;
+    configSave();
+  }
+  if (cloudUrl != "")
+  {
+    softConfig.cloud.url = cloudUrl;
+    configSave();
+  }
+  if (cloudApiKey != "")
+  {
+    softConfig.cloud.apiKey = cloudApiKey;
     configSave();
   }
 
@@ -1171,6 +1402,7 @@ void setup() {
         Serial.print("Name from code       : "); Serial.println(SOFT_NAME);
         configFileToCreate = 1;
       }
+
     }
     else
     {
@@ -1184,40 +1416,25 @@ void setup() {
       // debug create object here
       Serial.println("Config.json not found. Create one");
       
-      softConfig.wifi.enable     = 1;
-      softConfig.wifi.ssid       = "";
-      softConfig.wifi.password   = "";
-      softConfig.temp.adjustment = 0;
-      softConfig.temp.checkTimer = 60;
-      softConfig.alreadyStart    = 0;
-      softConfig.softName        = SOFT_NAME;
+      softConfig.wifi.enable       = 1;
+      softConfig.wifi.ssid         = "";
+      softConfig.wifi.password     = "";
+      softConfig.temp.adjustment   = 0;
+      softConfig.temp.checkTimer   = 60;
+      softConfig.temp.owLocationId = 3037520;
+      softConfig.temp.owCheckTimer = 600;
+      softConfig.alreadyStart      = 0;
+      softConfig.softName          = SOFT_NAME;
 
       Serial.println("Config.json : load save function");
       configSave();
     }
 
 
-    if (SPIFFS.exists("/data.json"))
+    // check Data
+    if (SPIFFS.exists("/data.csv"))
     {
-      dataJsonData = storageRead("/data.json");
-      DeserializationError jsonError = deserializeJson(jsonData, dataJsonData);
-      if (jsonError)
-      {
-        // Getting error when deserialise... I don know what to do here...
-      }
-
-      //consumptionLastCharge = jsonConsumption["lastCharge"];
-      //consumptionTotal      = jsonConsumption["total"];
-    }
-    else
-    {
-      //consumptionLastCharge  = 0;
-      //consumptionTotal       = 0;
-
-      //jsonConsumption["lastCharge"] = consumptionLastCharge;
-      //jsonConsumption["total"]      = consumptionTotal;
-
-      dataSave();
+      dataStats(timeClient.getEpochTime());
     }
   }
 
@@ -1277,7 +1494,7 @@ void setup() {
   if (internetConnection)
   {
     // check update
-    updateCheck();
+    updateCheck(1);
 
     // get time();
     timeClient.begin();
@@ -1292,7 +1509,8 @@ void setup() {
   display.display();
 
   // Need to display when booting
-  tempTimer = softConfig.temp.checkTimer + 1000;
+  tempTimer     = softConfig.temp.checkTimer + 10000;
+  tempTimerOw   = softConfig.temp.owCheckTimer + 10000;
 }
 
 
@@ -1372,22 +1590,39 @@ void loop()
 
     // log all temeratures
     dataSave();
+    dataPut("indoor", temperature, timeClient.getEpochTime());
     tempTimer = 0;
+  }
 
+
+  if (tempTimerOw > (softConfig.temp.owCheckTimer / sleepDelay) )
+  {
     // Get Info from openweathermap
     openWeatherGetWeather(Meteo);
 
     Serial.print("Object Meteo.temp : "); Serial.println(Meteo.temp);
 
-    // testscrolltext();
+    dataPut("outdoor", Meteo.temp, timeClient.getEpochTime());
+    tempTimerOw = 0;
+  }
 
+  if (tempTimerHour > (3600 / sleepDelay) )
+  {
+    updateCheck(0);
+    dataStats(timeClient.getEpochTime());
+    tempTimerHour = 0;
 
+    String messageToLog = "Datalog: temp int: "; messageToLog += temperature; messageToLog += " / Temp ext : "; messageToLog += Meteo.temp;
+    logger(messageToLog);
   }
 
   // need to display the time  
   screenDisplayMain();
+  // testscrolltext();
 
   tempTimer++;
+  tempTimerOw++;
+  tempTimerHour++;
 
   delay(sleepDelay * 1000);
 }
