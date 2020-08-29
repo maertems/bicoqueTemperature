@@ -38,8 +38,8 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.1.45"
-#define SOFT_DATE "2020-05-14"
+#define SOFT_VERSION "0.1.58"
+#define SOFT_DATE "2020-08-28"
 
 #define DEBUG 1
 
@@ -75,12 +75,15 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, SCREEN_RESET);
 float temperatureOld = -255 ;
 float temperature;
 bool networkEnable      = 1;
-bool internetConnection = 0; 
-int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
-int tempTimer = 0;
-int tempTimerOw = 0;
-int tempTimerHour = 3600;
+bool internetConnection = 0;
 IPAddress ip;
+int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
+
+// Timer variable
+int timerTemperatureLast = 0;
+int dataToPutCounter     = 0;
+int timerOpenWeatherLast = 0;
+int timerPerHourLast     = 0;
 
 
 // Wifi AP info for configuration
@@ -88,7 +91,7 @@ const char* wifiApSsid = SOFT_NAME;
 
 
 // Update info
-#define BASE_URL "http://mangue.net/ota/esp/" SOFT_NAME "/"
+#define BASE_URL "http://esp.mangue.net/ota/esp/" SOFT_NAME "/"
 #define UPDATE_URL BASE_URL "update.php"
 
 
@@ -111,14 +114,17 @@ typedef struct configTemp
 {
   float adjustment;
   int checkTimer;
-  String owLocationId;
-  int owCheckTimer;
-  String owApiKey;
+
+  boolean owEnable     = 1;
+  String  owLocationId;
+  int     owCheckTimer;
+  String  owApiKey;
 };
 typedef struct configCloud
 {
-  String url;
-  String apiKey;
+  boolean enable = 1;
+  String  url;
+  String  apiKey;
 };
 typedef struct config
 {
@@ -127,6 +133,8 @@ typedef struct config
   configCloud cloud;
   boolean alreadyStart;
   String softName;
+  String softVersion;
+  boolean checkUpdateEnable = 1;
 };
 config softConfig;
 
@@ -153,7 +161,22 @@ meteoStruct Meteo;
 // ********************************************
 // SPIFFFS storage Functions
 // ********************************************
-String storageRead(char *fileName)
+String storageDir(String name)
+{
+    String output;
+    Dir dir = SPIFFS.openDir(name);
+    while (dir.next()) 
+    {
+      output += dir.fileName();
+      output += " - ";
+      File f = dir.openFile("r");
+      output += f.size();
+      output += "\n";
+    }
+
+   return output;
+}
+String storageRead(String fileName)
 {
   String dataText;
 
@@ -166,18 +189,22 @@ String storageRead(char *fileName)
   else
   {
     size_t sizeFile = file.size();
-    if (sizeFile > 400)
+    if (sizeFile > 400 and 1 == 0)
     {
        Serial.println("Size of file is too clarge");
     }
     else
     {
       dataText = file.readString();
-      file.close();
     }
   }
 
+  file.close();
   return dataText;
+}
+void storageDel(String fileName)
+{
+  SPIFFS.remove(fileName);
 }
 
 bool storageWrite(char *fileName, String dataText)
@@ -190,7 +217,8 @@ bool storageWrite(char *fileName, String dataText)
   return true;
 }
 
-bool storageAppend(char *fileName, String dataText)
+//bool storageAppend(char *fileName, String dataText)
+bool storageAppend(String fileName, String dataText)
 {
   File file = SPIFFS.open(fileName, "a");
   file.print(dataText);
@@ -231,7 +259,8 @@ void dataArchive()
   bool conitnueLoop        = 0;
   unsigned int lineToStart = 1;
 
-  do {
+  do 
+  {
     conitnueLoop            = 0;
     unsigned int lineNumber = 0;
     float temperatureTemp   = 0;
@@ -270,15 +299,23 @@ void dataArchive()
     }
     file.close();
 
-    temperatureTemp = temperatureTemp / lineNumber; // get moyen
+    float temperatureMoy = temperatureTemp / lineNumber; // get moyen
+    
 
     String lineToLog = String(lastTimestamp);
     lineToLog += ",";
-    lineToLog += temperatureTemp;
+    lineToLog += temperatureMoy;
     lineToLog += "\n";
 
     if (DEBUG)
     {
+      String message = "dataArchive : sumTemp : ";
+      message += temperatureTemp;
+      message += " / lineNumber : ";
+      message += lineNumber;
+      logger(message);
+      logger(lineToLog);
+
       Serial.print("Archive temp : ");
       Serial.print(lineToLog);
     }
@@ -291,6 +328,124 @@ void dataArchive()
   dataClear();
 }
 
+void dataRotateToDay()
+{
+  String fileFrom = "/history.csv";
+  String fileTo   = "/dataByDay.csv";
+
+    long now               = timeClient.getEpochTime();
+    int actualDay          = 0;
+    float temperatureMax   = 0;
+    float temperatureMin   = 999;
+
+    int dayToStop          = (int) now / 86400; dayToStop -= 7;
+
+    File fileTemp  = SPIFFS.open("/tmp.dataRotate.csv", "w");
+    File fileWrite = SPIFFS.open(fileTo, "a");
+    File file      = SPIFFS.open(fileFrom, "r");
+    while(file.available())  // we could open the file, so loop through it to find the record we require
+    {
+      String time = file.readStringUntil(',');   // Read line by line from the file
+      String tempFile = file.readStringUntil('\n');  // Read line by line from the file
+
+      float temp = tempFile.toFloat();
+
+      String message = "dataRotate : time : "; message += time; message += " / temp : "; message += temp;
+      //logger(message);
+      Serial.println(message);
+
+      if (time.length() > 0)
+      {
+        //time.remove( time.length() -3 );
+        long timestamp  = time.toInt() ;
+        float dayFloat = timestamp / 86400;
+        int day = (int) dayFloat;
+
+        message = "timestamp = "; message += timestamp; message += " / day = "; message += day; message += " / dayFloat : "; message += dayFloat; message += " / actualDay : "; message += actualDay;
+	Serial.println(message);
+        //logger(message);
+
+        if (day > dayToStop)
+	{
+            if (actualDay == 0)
+            {
+              // no new line to add. close all and quit
+              fileTemp.close();
+              fileWrite.close();
+              file.close();
+              SPIFFS.remove("/tmp.dataRotate.csv");
+              return;
+            }
+
+            String lineToLog = time;
+            lineToLog += ",";
+            lineToLog += tempFile;
+            fileTemp.println(lineToLog);
+        }
+        else
+        {
+          if (day == actualDay)
+          {
+            // Getting the max and min temperature for a day
+            if (temp > temperatureMax ) { temperatureMax = temp; }
+            if (temp < temperatureMin ) { temperatureMin = temp; }
+          }
+	  else
+	  {
+            // need to write previous day info on file
+            // If it's the fist line don't log
+            if (actualDay != 0)
+            {
+              long timeToLog = ((actualDay * 86400) + 43200); // Set log to 12am
+              String lineToLog = String(timeToLog);
+              lineToLog += ",";
+              lineToLog += temperatureMax;
+              lineToLog += ",";
+              lineToLog += temperatureMin;
+              fileWrite.println(lineToLog);
+              Serial.println(lineToLog);
+            }
+
+            actualDay = day;
+            temperatureMax   = temp;
+            temperatureMin   = temp;
+          }
+        }
+      }
+    }
+    file.close();
+    fileTemp.close();
+
+    if (actualDay != 0)
+    {
+      int timeToLog = (actualDay * 86400) + 43200; // Set log to 12am
+      String lineToLog = String(timeToLog);
+      lineToLog += ",";
+      lineToLog += temperatureMax;
+      lineToLog += ",";
+      lineToLog += temperatureMin;
+      fileWrite.println(lineToLog);
+      Serial.println(lineToLog);
+    }
+    fileWrite.close();
+
+    if (DEBUG)
+    {
+      String message = "dataArchive : sumTemp : ";
+      //message += temperatureTemp;
+      message += " / lineNumber : ";
+      //message += lineNumber;
+      logger(message);
+      //logger(lineToLog);
+
+      //Serial.print("Archive temp : ");
+      //Serial.print(lineToLog);
+    }
+
+  // remove data
+  storageClear("/history.csv");
+  SPIFFS.rename("/tmp.dataRotate.csv", fileFrom);
+}
 
 void dataStats(int timeNow)
 {
@@ -304,6 +459,7 @@ void dataStats(int timeNow)
   {
     lineNumber++;
     String time = file.readStringUntil(',');   // Read line by line from the file
+    String temp = file.readStringUntil('\n');  // Read line by line from the file
 
     if (firstLine == 1)
     {
@@ -313,13 +469,20 @@ void dataStats(int timeNow)
 
     lastTimestamp = time;
   }
+  file.close();
 
   if (DEBUG)
   {
-    Serial.println("Data Stats :");
-    Serial.print("First Timestamp : "); Serial.println(firstTimestamp); 
-    Serial.print("Last Timestamp : "); Serial.println(lastTimestamp); 
-    Serial.print("lineNumber : "); Serial.println(lineNumber); 
+    String message = "Data Stats : ";
+    message += "First Timestamp : ";
+    message += firstTimestamp;
+    message += " - Last Timestamp : ";
+    message += lastTimestamp;
+    message += " - lineNumber : ";
+    message += lineNumber;
+
+    Serial.println(message);
+    logger(message);
   }
 
   // Check if we need to archive datas
@@ -330,16 +493,31 @@ void dataStats(int timeNow)
 
 }
 
+void dataHistoryStats()
+{
+  unsigned int lineNumber = 0;
+  File file = SPIFFS.open("/history.csv", "r");
+  while(file.available())  // we could open the file, so loop through it to find the record we require
+  {
+    lineNumber++;
+  }
+  file.close();
+
+  String message = "Data History Stats : ";
+  message += "lineNumber : ";
+  message += lineNumber;
+
+  Serial.println(message);
+  logger(message);
+}
 
 
 
-
-void dataRead(String (&datas)[2])
+String dataRead()
 {
   unsigned int lineNumber = 0;
   
-  datas[0] = "[";
-  //datas[1] = "[";
+  String data = "[";
 
   File file = SPIFFS.open("/history.csv", "r");
   while(file.available())  // we could open the file, so loop through it to find the record we require
@@ -347,33 +525,67 @@ void dataRead(String (&datas)[2])
     lineNumber++;       
     String time = file.readStringUntil(',');   // Read line by line from the file
     String temp = file.readStringUntil('\n');  // Read line by line from the file
+    float tempFloat = temp.toFloat();
 
     if (time.length() > 0)
     {
       if (lineNumber > 1)
       {
-        datas[0] += ',';
-        // datas[1] += ',';
+        data += ',';
       }
 
-      datas[0] += String( '[' + time + "000," + temp + ']');
-      // datas[0] += time;
-      // datas[1] += temp;
+      data += String( '[' + time + "000,");
+      data += tempFloat;
+      data += "]";
     }
 
     Serial.print("time : "); Serial.print(time); Serial.print(" / temp : "); Serial.println(temp);
   }
 
-  datas[0] += "]";
-  // datas[1] += "]";
+  data += "]";
 
   Serial.println(lineNumber);         // show line number of SPIFFS file
   file.close(); 
 
-  //return &datas;
+  return data;
 }
 
+String dataReadNew()
+{
+  unsigned int lineNumber = 0;
 
+  String data = "[";
+
+  File file = SPIFFS.open("/dataByDay.csv", "r");
+  while(file.available())  // we could open the file, so loop through it to find the record we require
+  {
+    lineNumber++;
+    String time = file.readStringUntil(',');   // Read line by line from the file
+    String temp = file.readStringUntil('\n');  // Read line by line from the file
+    float tempFloat = temp.toFloat();
+
+    if (time.length() > 0)
+    {
+      if (lineNumber > 1)
+      {
+        data += ",";
+      }
+
+      data += String( "[" + time + "000,");
+      data += tempFloat;
+      data += "]";
+    }
+
+    Serial.print("time : "); Serial.print(time); Serial.print(" / temp : "); Serial.println(temp);
+  }
+
+  data += "]";
+
+  Serial.println(lineNumber);         // show line number of SPIFFS file
+  file.close();
+
+  return data;
+}
 
 
 String configSerialize()
@@ -386,6 +598,7 @@ String configSerialize()
 
   jsonConfig["alreadyStart"]     = softConfig.alreadyStart;
   jsonConfig["softName"]         = softConfig.softName;
+  jsonConfig["softVersion"]      = softConfig.softVersion;
   jsonConfigWifi["ssid"]         = softConfig.wifi.ssid;
   jsonConfigWifi["password"]     = softConfig.wifi.password;
   jsonConfigWifi["enable"]       = softConfig.wifi.enable;
@@ -394,8 +607,10 @@ String configSerialize()
   jsonConfigTemp["owLocationId"] = softConfig.temp.owLocationId;
   jsonConfigTemp["owCheckTimer"] = softConfig.temp.owCheckTimer;
   jsonConfigTemp["owApiKey"]     = softConfig.temp.owApiKey;
+  jsonConfigTemp["owEnable"]     = softConfig.temp.owEnable;
   jsonConfigCloud["apiKey"]      = softConfig.cloud.apiKey;
   jsonConfigCloud["url"]         = softConfig.cloud.url;
+  jsonConfigCloud["enable"]      = softConfig.cloud.enable;
   serializeJson(jsonConfig, dataJsonConfig);
 
   return dataJsonConfig;
@@ -435,7 +650,9 @@ bool configRead(config &ConfigTemp)
   }
 
   ConfigTemp.alreadyStart      = jsonConfig["alreadyStart"];
+  ConfigTemp.checkUpdateEnable = jsonConfig["checkUpdateEnable"];
   ConfigTemp.softName          = jsonConfig["softName"].as<String>();
+  ConfigTemp.softVersion       = jsonConfig["softVersion"].as<String>();
   ConfigTemp.wifi.ssid         = jsonConfig["wifi"]["ssid"].as<String>();
   ConfigTemp.wifi.password     = jsonConfig["wifi"]["password"].as<String>();
   ConfigTemp.wifi.enable       = jsonConfig["wifi"]["enable"];
@@ -444,6 +661,8 @@ bool configRead(config &ConfigTemp)
   ConfigTemp.temp.owLocationId = jsonConfig["temp"]["owLocationId"].as<String>();
   ConfigTemp.temp.owCheckTimer = jsonConfig["temp"]["owCheckTimer"];
   ConfigTemp.temp.owApiKey     = jsonConfig["temp"]["owApiKey"].as<String>();
+  ConfigTemp.temp.owEnable     = jsonConfig["temp"]["owEnable"];
+  ConfigTemp.cloud.enable      = jsonConfig["cloud"]["enable"];
   ConfigTemp.cloud.apiKey      = jsonConfig["cloud"]["apiKey"].as<String>();
   ConfigTemp.cloud.url         = jsonConfig["cloud"]["url"].as<String>();
 
@@ -463,12 +682,16 @@ void configDump(config ConfigTemp)
   Serial.print("  - owLocationId : "); Serial.println(ConfigTemp.temp.owLocationId);
   Serial.print("  - owCheckTimer : "); Serial.println(ConfigTemp.temp.owCheckTimer);
   Serial.print("  - owApiKey : "); Serial.println(ConfigTemp.temp.owApiKey);
+  Serial.print("  - owEnable : "); Serial.println(ConfigTemp.temp.owEnable);
   Serial.println("Cloud data :");
+  Serial.print("  - enable : "); Serial.println(ConfigTemp.cloud.enable);
   Serial.print("  - apiKey : "); Serial.println(ConfigTemp.cloud.apiKey);
   Serial.print("  - url : "); Serial.println(ConfigTemp.cloud.url);
   Serial.println("General data :");
   Serial.print("  - alreadyStart : "); Serial.println(ConfigTemp.alreadyStart);
+  Serial.print("  - checkUpdateEnable : "); Serial.println(ConfigTemp.checkUpdateEnable);
   Serial.print("  - softName : "); Serial.println(ConfigTemp.softName);
+  Serial.print("  - softVersion : "); Serial.println(ConfigTemp.softVersion);
 }
 
 
@@ -715,14 +938,16 @@ void logger(String message)
 {
   if (internetConnection)
   {
-    HTTPClient httpClient;
+    HTTPClient httpClientPost;
     String urlTemp = BASE_URL;
-    urlTemp += "log.php?message=";
-    urlTemp += urlencode(message);
+    urlTemp       += "log.php";
+    String data    = "message=";
+    data          += urlencode(message);
 
-    httpClient.begin(urlTemp);
-    httpClient.GET();
-    httpClient.end();
+    httpClientPost.begin(urlTemp);
+    httpClientPost.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    httpClientPost.POST(data);
+    httpClientPost.end();
   }
 }
 
@@ -734,25 +959,26 @@ bool dataPut(String type, float temp, unsigned int timestamp)
     {
       HTTPClient httpClient;
       String urlTemp = softConfig.cloud.url;
-      urlTemp += "/update.php?secret=";
-      urlTemp += softConfig.cloud.apiKey;
-      urlTemp += "&type=";
-      urlTemp += type;
-      urlTemp += "&temp=";
-      urlTemp += temp;
-      urlTemp += "&timestamp=";
-      urlTemp += timestamp;
+      urlTemp += "/update.php";
+      String message = "secret=";
+      message += softConfig.cloud.apiKey;
+      message += "&type=";
+      message += type;
+      message += "&temp=";
+      message += temp;
+      message += "&timestamp=";
+      message += timestamp;
 
       //String url = urlencode(urlTemp);
-      String url = urlTemp;
 
       if (DEBUG)
       {
-        Serial.print("dataPush : Url for external use : "); Serial.println(url);
+        Serial.print("dataPush : Url for external use : "); Serial.println(urlTemp);
       }
 
-      httpClient.begin(url);
-      httpClient.GET();
+      httpClient.begin(urlTemp);
+      httpClient.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      httpClient.POST(message);
       httpClient.end();
 
       return 1;
@@ -951,15 +1177,73 @@ void webReboot()
 
   ESP.restart();
 }
+
+void webFsDir()
+{
+  String directory    = server.arg("directory");
+
+  String message = storageDir(directory);
+  server.send(200, "text/html", message);
+}
+void webFsRead()
+{
+  String file    = server.arg("file");
+
+  String message = storageRead(file);
+  server.send(200, "text/html", message);
+}
+void webFsDel()
+{
+  String file    = server.arg("file");
+
+  storageDel(file);
+  server.send(200, "text/html", "done");
+}
+
+
 void webApiConfig()
 {
   String dataJsonConfig = configSerialize();
   server.send(200, "application/json", dataJsonConfig);
 }
 
+void webApiHistoryRotate()
+{
+  dataRotateToDay();
+  server.send(200, "text/html", "done");
+}
+
+void webApiHistoryByDay()
+{
+  String message = dataReadNew();
+  message += "\n";
+
+  server.send(200, "text/html", message);
+}
+
+
 void webApiHistoryClear()
 {
   dataClear();
+  server.send(200, "text/html", "done");
+}
+
+void webApiHistoryFake()
+{
+  File file = SPIFFS.open("/history.csv", "w");
+  int timestamp = 1590777075;
+
+  while (timestamp < 1598602940)
+  {
+    String dataText;
+    dataText  = timestamp;
+    dataText += ",";
+    dataText += random(10,30);
+
+    file.println(dataText);
+    timestamp += 7201;
+  }
+  file.close();
   server.send(200, "text/html", "done");
 }
 
@@ -992,30 +1276,47 @@ void webWrite()
 {
   String message;
 
-  String adjustment    = server.arg("adjustment");
-  String checkTimer    = server.arg("checkTimer");
+  String adjustment    = server.arg("tempAdjustment");
+  String checkTimer    = server.arg("tempCheckTimer");
+
   String owLocationId  = server.arg("owLocationId");
   String owCheckTimer  = server.arg("owCheckTimer");
   String owApiKey      = server.arg("owApiKey");
+  String owEnable      = server.arg("owEnable");
+
   String cloudUrl      = server.arg("cloudUrl");
   String cloudApiKey   = server.arg("cloudApiKey");
+  String cloudEnable   = server.arg("cloudEnable");
 
-  String wifiEnable  = server.arg("wifienable");
-  String alreadyBoot = server.arg("alreadyboot");
+  String wifiEnable    = server.arg("wifiEnable");
 
-  
+  String alreadyBoot   = server.arg("alreadStart");
+  String checkUpdate   = server.arg("checkUpdateEnable");
+
+
+  // Global ----------  
+  if (checkUpdate != "")
+  {
+    softConfig.checkUpdateEnable = false;
+    if ( checkUpdate == "1") { softConfig.checkUpdateEnable = true; }
+    configSave();
+  }
   if ( alreadyBoot != "")
   {
     softConfig.alreadyStart = false;
     if ( alreadyBoot == "1") { softConfig.alreadyStart = true; }
     configSave();
   }
+
+  // Wifi
   if ( wifiEnable != "")
   {
     softConfig.wifi.enable = false;
     if ( wifiEnable == "1") { softConfig.wifi.enable = true; }
     configSave();
   }
+
+  // Temp
   if (adjustment != "")
   {
     softConfig.temp.adjustment = adjustment.toFloat();
@@ -1024,6 +1325,14 @@ void webWrite()
   if (checkTimer != "")
   {
     softConfig.temp.checkTimer = checkTimer.toInt();
+    configSave();
+  }
+
+  // OpenWeather
+  if (owEnable != "")
+  {
+    softConfig.temp.owEnable = false;
+    if ( owEnable == "1") { softConfig.temp.owEnable = true; }
     configSave();
   }
   if (owCheckTimer != "")
@@ -1039,6 +1348,14 @@ void webWrite()
   if (owApiKey != "")
   {
     softConfig.temp.owApiKey = owApiKey;
+    configSave();
+  }
+
+  // Cloud
+  if (cloudEnable != "")
+  {
+    softConfig.cloud.enable = false;
+    if ( cloudEnable == "1") { softConfig.cloud.enable = true; }
     configSave();
   }
   if (cloudUrl != "")
@@ -1103,14 +1420,8 @@ void webWifiWrite()
 
 void webApiHistory()
 {
-  String datas[2];
-  dataRead(datas);
 
-  String message;
-
-  message = datas[0];
-  message += "\n";
-  message += datas[1];
+  String message = dataRead();
   message += "\n";
 
   server.send(200, "text/html", message);
@@ -1159,11 +1470,12 @@ void web_index()
 {
 
   // Get historic from file
-  String datas[2];
-  dataRead(datas);
+  String data = dataRead();
+  //String data = "[]";
+  String dataDay = dataReadNew();
+  //String dataDay = "[]";
 
-
-  String index_html = R"rawliteral( 
+  String index_html = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1197,7 +1509,19 @@ index_html += R"rawliteral(</span>
     <sup class="units">&deg;C</sup>
   </p>
   <p>
+    <i class="fas fa-thermometer-half" style="color:#059e8a;"></i>
+    <span class="dht-labels">Exterieur</span>
+    <span id="temperature_ext">)rawliteral";
+index_html += Meteo.temp;
+index_html += R"rawliteral(</span>
+    <sup class="units">&deg;C</sup>
+  </p>
+
+  <p>
   <div id="chart-temperature" class="container"></div>
+  </p>
+  <p>
+  <div id="chart-day" class="container"></div>
   </p>
 </body>
 
@@ -1210,7 +1534,7 @@ var chartT = new Highcharts.Chart({
   series: [{
     showInLegend: false,
     data: )rawliteral";
-index_html += datas[0];
+index_html += data;
 index_html += R"rawliteral(
   }],
   plotOptions: {
@@ -1247,6 +1571,56 @@ index_html += R"rawliteral(
   credits: { enabled: false }
 });
 
+var chart2 = Highcharts.chart('chart-day', {
+    chart: {
+        type: 'spline', zoomType: 'x'
+    },
+    title: {
+        text: 'Historique'
+    },
+  series: [{
+    showInLegend: false,
+    data: )rawliteral";
+index_html += dataDay;
+index_html += R"rawliteral(
+  }],
+  plotOptions: {
+    fillColor: {
+      linearGradient: {
+            x1: 0,
+            y1: 0,
+            x2: 0,
+            y2: 1
+        },
+        stops: [
+            [0, Highcharts.getOptions().colors[0]],
+            [1, Highcharts.color(Highcharts.getOptions().colors[0]).setOpacity(0).get('rgba')]
+        ]
+    },
+    marker: {
+        radius: 2
+      },
+    lineWidth: 1,
+    states: {
+        hover: {
+            lineWidth: 1
+        }
+    },
+    threshold: null,
+    series: { color: '#059e8a' }
+  },
+  xAxis: { type: 'datetime',
+    dateTimeLabelFormats: { second: '%H:%M:%S' },
+  },
+  yAxis: {
+    title: { text: 'Temperature (Celsius)' }
+  },
+  time: {
+    timezone: 'Europe/Paris'
+  },
+  credits: { enabled: false }
+});
+
 
 
 setInterval(function ( ) {
@@ -1265,6 +1639,189 @@ setInterval(function ( ) {
 
   server.send(200, "text/html", index_html);
 }
+
+
+
+void web_config()
+{
+  String index_html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+
+</head>
+<body>
+
+<div class="container" style="width: 80%; margin: auto;max-width: 564px">
+  <h2>bicoqueTemperature - configuration</h2>
+
+    <p>
+    <ul class="list-group">
+      <li class="list-group-item">
+        <p>Wifi</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=wifiEnable onChange="updateBinary('wifiEnable')"></span></li>
+          <li class="list-group-item">Ssid<span class="pull-right"><input type="text" value=ssid id=wifiSsid></span></li>
+          <li class="list-group-item">Password<span class="pull-right"><input type="text" value=password id=wifiPassword></span></li>
+          </ul>
+        </p>
+        <p align=right>
+          <input type="button" value="update" onclick="wifiUpdate()">
+        </p>
+      </li>
+      <li class="list-group-item">
+        <p>Temperature sensor</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">Adjustment<span class="pull-right"><input type="text" value=adjustment id=tempAdjustment onChange="updateText('tempAdjustment')"></span></li>
+          <li class="list-group-item">Check Timer<span class="pull-right"><input type="text" value=checkTimer id=tempCheckTimer onChange="updateText('tempCheckTimer')"></span></li>
+          </ul>
+        </p>
+      </li>
+      <li class="list-group-item">
+        <p>OpenWeathermap</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=owEnable onChange="updateBinary('owEnable')"></span></li>
+          <li class="list-group-item">Check Timer<span class="pull-right"><input type="text" value=checkTimer id=owCheckTimer onChange="updateText('owCheckTimer')"></span></li>
+          <li class="list-group-item">LocationId<span class="pull-right"><input type="text" value=locationId id=owLocationId onChange="updateText('owLocationId')"></span></li>
+          <li class="list-group-item">API Key<span class="pull-right"><input type="text" value=apiKey id=owApiKey onChange="updateText('owApiKey')"></span></li>
+          </ul>
+        </p>
+      </li>
+      <li class="list-group-item">
+        <p>Cloud Extension</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=cloudEnable onChange="updateBinary('cloudEnable')"></span></li>
+          <li class="list-group-item">URL<span class="pull-right"><input type="text" value=url id=cloudUrl onChange="updateText('cloudUrl')"></span></li>
+          <li class="list-group-item">API Key<span class="pull-right"><input type="text" value=apiKey id=cloudApiKey onChange="updateText('cloudApiKey')"></span></li>
+          </ul>
+        </p>
+      </li>
+      <li class="list-group-item">
+        <p>Global</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">alreadyStart<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=alreadyStart onChange="updateBinary('alreadyStart')"></span></li>
+          <li class="list-group-item">softName<span class="pull-right" id=softName></span></li>
+          <li class="list-group-item">softVersion<span class="pull-right" id=softVersion></span></li>
+          <li class="list-group-item">Check New Version<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=checkUpdateEnable onChange="updateBinary('checkUpdateEnable')"></span></li>
+          </ul>
+        </p>
+      </li>
+    </ul>
+    </p>
+
+</div>
+</body>
+
+<script>
+function getData()
+{
+  var xhttp = new XMLHttpRequest();
+
+  xhttp.onreadystatechange = function()
+  {
+    if (this.readyState == 4 && this.status == 200)
+    {
+      const obj = JSON.parse(this.responseText);
+      console.log(obj.wifi.ssid);
+      //document.getElementById("wifi_ssid").innerHTML = obj.wifi.ssid;
+      document.getElementById("wifiSsid").value = obj.wifi.ssid;
+      document.getElementById("wifiPassword").value = obj.wifi.password;
+      document.getElementById("wifiEnable").checked = obj.wifi.enable;
+
+      document.getElementById("tempAdjustment").value = obj.temp.adjustment;
+      document.getElementById("tempCheckTimer").value = obj.temp.checkTimer;
+      document.getElementById("owCheckTimer").value = obj.temp.owCheckTimer;
+      document.getElementById("owLocationId").value = obj.temp.owLocationId;
+      document.getElementById("owApiKey").value = obj.temp.owApiKey;
+      document.getElementById("owEnable").checked = obj.temp.owEnable;
+
+      document.getElementById("cloudApiKey").value = obj.cloud.apiKey;
+      document.getElementById("cloudUrl").value = obj.cloud.url;
+      document.getElementById("cloudEnable").checked = obj.cloud.enable;
+
+      document.getElementById("alreadyStart").checked = obj.alreadyStart;
+      document.getElementById("softName").innerHTML = obj.softName;
+      document.getElementById("softVersion").innerHTML = obj.softVersion;
+      document.getElementById("checkUpdateEnable").checked = obj.checkUpdateEnable;
+    }
+  };
+  xhttp.open("GET", "/api/config", true);
+  xhttp.send();
+}
+
+function updateBinary(binary)
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/write?" + binary + "=";
+
+  if (document.getElementById(binary).checked == true) { url = url + "1"; }
+  else { url = url + "0"; }
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+
+function updateText(textId)
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/write?" + textId + "=" + document.getElementById(textId).value;
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+
+function wifiUpdate()
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/setting?ssid=" + document.getElementById("wifi_ssid").value + "&pass=" + document.getElementById("wifi_password").value;
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+
+getData();
+//setInterval(getData, 10000);
+
+</script>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", index_html);
+}
+
+
+
+
+
 
 
 
@@ -1316,23 +1873,32 @@ void screenDisplayMain()
 
   // Lower line
 
-  // Time
-  display.setCursor(0,55);
-  String hours;
-  if ( timeClient.getHours() > 9 ) { hours = timeClient.getHours(); }
-  else { hours = "0"; hours += timeClient.getHours(); }
+  // message
+  // if (timeClient.getHours() > 7 )
+  // {
+  //   display.setCursor(0,55);
+  //   display.print("Bon Anniv Marie");
+  //   Serial.println("Bon anniv");
+  // }
+  // else
+  {
+    // Time
+    display.setCursor(0,55);
+    String hours;
+    if ( timeClient.getHours() > 9 ) { hours = timeClient.getHours(); }
+    else { hours = "0"; hours += timeClient.getHours(); }
 
-  String minutes;
-  if ( timeClient.getMinutes() > 9 ) { minutes = timeClient.getMinutes(); }
-  else { minutes = "0"; minutes += timeClient.getMinutes(); }
+    String minutes;
+    if ( timeClient.getMinutes() > 9 ) { minutes = timeClient.getMinutes(); }
+    else { minutes = "0"; minutes += timeClient.getMinutes(); }
 
-  display.print(hours); display.print(":"); display.print(minutes);
+    display.print(hours); display.print(":"); display.print(minutes);
 
-  // IP
-  display.setTextSize(1);
-  display.setCursor(40,55);
-  display.print(ip);
-
+    // IP
+    display.setTextSize(1);
+    display.setCursor(40,55);
+    display.print(ip);
+  }
 
   display.display();
 
@@ -1402,6 +1968,23 @@ void setup() {
         Serial.print("Name from code       : "); Serial.println(SOFT_NAME);
         configFileToCreate = 1;
       }
+      else
+      {
+        // For update
+        String lineToLog = "Check update new feature : softVersion : ";
+        lineToLog       += softConfig.softVersion;
+        logger(lineToLog);
+
+        if ( softConfig.softVersion == "" )
+        {
+          logger("  -> Enter in update if");
+          softConfig.softVersion       = SOFT_VERSION;
+          softConfig.temp.owEnable     = 1;
+          softConfig.checkUpdateEnable = 1;
+          softConfig.cloud.enable      = 1;
+          configSave();
+        }
+      }
 
     }
     else
@@ -1415,7 +1998,9 @@ void setup() {
       // Start in AP mode to configure
       // debug create object here
       Serial.println("Config.json not found. Create one");
-      
+      Serial.println("Clear SPIFF before");
+      SPIFFS.format();
+
       softConfig.wifi.enable       = 1;
       softConfig.wifi.ssid         = "";
       softConfig.wifi.password     = "";
@@ -1423,8 +2008,15 @@ void setup() {
       softConfig.temp.checkTimer   = 60;
       softConfig.temp.owLocationId = 3037520;
       softConfig.temp.owCheckTimer = 600;
+      softConfig.temp.owApiKey     = "";
+      softConfig.temp.owEnable     = 0;
+      softConfig.cloud.enable      = 0;
+      softConfig.cloud.url         = "";
+      softConfig.cloud.apiKey      = "";
       softConfig.alreadyStart      = 0;
       softConfig.softName          = SOFT_NAME;
+      softConfig.softVersion       = SOFT_VERSION;
+      softConfig.checkUpdateEnable = 1;
 
       Serial.println("Config.json : load save function");
       configSave();
@@ -1463,16 +2055,26 @@ void setup() {
 
   //server.on("/", webRoot);
   server.on("/", web_index);
+  server.on("/config", web_config);
   server.on("/reload", webReload);
   server.on("/write", webWrite);
   server.on("/debug", webDebug);
   server.on("/reboot", webReboot);
   server.on("/display", webDisplay);
   server.on("/temperature", webTemperature);
+
   server.on("/api/config", webApiConfig);
   server.on("/api/history", webApiHistory);
+  server.on("/api/historyByDay", webApiHistoryByDay);
   server.on("/api/historyClear", webApiHistoryClear);
+  server.on("/api/historyFake", webApiHistoryFake);
+  server.on("/api/historyRotate", webApiHistoryRotate);
   server.on("/api/forecast", webApiForecast);
+
+  server.on("/fs/dir", webFsDir);
+  server.on("/fs/read", webFsRead);
+  server.on("/fs/del", webFsDel);
+
   server.on("/setting", webWifiWrite);
   server.on("/wifi", webWifiSetup);
 
@@ -1508,9 +2110,10 @@ void setup() {
   display.println("Init ended.. starting");
   display.display();
 
-  // Need to display when booting
-  tempTimer     = softConfig.temp.checkTimer + 10000;
-  tempTimerOw   = softConfig.temp.owCheckTimer + 10000;
+  if (DEBUG)
+  {
+  //  dataHistoryStats();
+  }
 }
 
 
@@ -1524,9 +2127,7 @@ void loop()
   // We check httpserver evry 1 sec
   // We check Temp every X sec
 
-
-  float sleepDelay = 0.1; // in secs  - old value : 0.1 
-  
+  int timeNow = timeClient.getEpochTime(); 
 
   if (networkEnable)
   {
@@ -1567,7 +2168,8 @@ void loop()
   }
 
 
-  if (tempTimer > (softConfig.temp.checkTimer / sleepDelay) )
+  //if (tempTimer > (softConfig.temp.checkTimer / sleepDelay) )
+  if ( (timerTemperatureLast + softConfig.temp.checkTimer) < timeNow )
   {
     // Get sensor from 1wire
     sensors.requestTemperatures(); 
@@ -1590,27 +2192,38 @@ void loop()
 
     // log all temeratures
     dataSave();
-    dataPut("indoor", temperature, timeClient.getEpochTime());
-    tempTimer = 0;
+
+    // Flood on SFR network and they blacklist IPs
+    if (dataToPutCounter > 10)
+    {
+      dataPut("indoor", temperature, timeNow);
+      dataToPutCounter = 0;
+    }
+    dataToPutCounter++;
+
+    timeNow = timeClient.getEpochTime();
+    timerTemperatureLast = timeNow;
   }
 
 
-  if (tempTimerOw > (softConfig.temp.owCheckTimer / sleepDelay) )
+  if ( ( timerOpenWeatherLast + softConfig.temp.owCheckTimer) < timeNow )
   {
     // Get Info from openweathermap
     openWeatherGetWeather(Meteo);
 
     Serial.print("Object Meteo.temp : "); Serial.println(Meteo.temp);
 
-    dataPut("outdoor", Meteo.temp, timeClient.getEpochTime());
-    tempTimerOw = 0;
+    dataPut("outdoor", Meteo.temp, timeNow);
+    timerOpenWeatherLast = timeNow;
+    timeNow = timeClient.getEpochTime();
   }
 
-  if (tempTimerHour > (3600 / sleepDelay) )
+  if ( (timerPerHourLast + 3600) < timeNow )
   {
     updateCheck(0);
-    dataStats(timeClient.getEpochTime());
-    tempTimerHour = 0;
+    dataStats(timeNow);
+    dataRotateToDay();
+    timerPerHourLast = timeNow;
 
     String messageToLog = "Datalog: temp int: "; messageToLog += temperature; messageToLog += " / Temp ext : "; messageToLog += Meteo.temp;
     logger(messageToLog);
@@ -1620,9 +2233,5 @@ void loop()
   screenDisplayMain();
   // testscrolltext();
 
-  tempTimer++;
-  tempTimerOw++;
-  tempTimerHour++;
-
-  delay(sleepDelay * 1000);
+  delay(100);
 }
