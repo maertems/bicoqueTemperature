@@ -38,10 +38,10 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.1.58"
-#define SOFT_DATE "2020-08-28"
+#define SOFT_VERSION "0.1.64"
+#define SOFT_DATE "2020-09-03"
 
-#define DEBUG 1
+#define DEBUG 0
 
 // NTP Constant
 #define NTP_SERVER "ntp.ovh.net"
@@ -596,21 +596,22 @@ String configSerialize()
   JsonObject jsonConfigTemp  = jsonConfig.createNestedObject("temp");
   JsonObject jsonConfigCloud = jsonConfig.createNestedObject("cloud");
 
-  jsonConfig["alreadyStart"]     = softConfig.alreadyStart;
-  jsonConfig["softName"]         = softConfig.softName;
-  jsonConfig["softVersion"]      = softConfig.softVersion;
-  jsonConfigWifi["ssid"]         = softConfig.wifi.ssid;
-  jsonConfigWifi["password"]     = softConfig.wifi.password;
-  jsonConfigWifi["enable"]       = softConfig.wifi.enable;
-  jsonConfigTemp["adjustment"]   = softConfig.temp.adjustment;
-  jsonConfigTemp["checkTimer"]   = softConfig.temp.checkTimer;
-  jsonConfigTemp["owLocationId"] = softConfig.temp.owLocationId;
-  jsonConfigTemp["owCheckTimer"] = softConfig.temp.owCheckTimer;
-  jsonConfigTemp["owApiKey"]     = softConfig.temp.owApiKey;
-  jsonConfigTemp["owEnable"]     = softConfig.temp.owEnable;
-  jsonConfigCloud["apiKey"]      = softConfig.cloud.apiKey;
-  jsonConfigCloud["url"]         = softConfig.cloud.url;
-  jsonConfigCloud["enable"]      = softConfig.cloud.enable;
+  jsonConfig["alreadyStart"]      = softConfig.alreadyStart;
+  jsonConfig["checkUpdateEnable"] = softConfig.checkUpdateEnable;
+  jsonConfig["softName"]          = softConfig.softName;
+  jsonConfig["softVersion"]       = softConfig.softVersion;
+  jsonConfigWifi["ssid"]          = softConfig.wifi.ssid;
+  jsonConfigWifi["password"]      = softConfig.wifi.password;
+  jsonConfigWifi["enable"]        = softConfig.wifi.enable;
+  jsonConfigTemp["adjustment"]    = softConfig.temp.adjustment;
+  jsonConfigTemp["checkTimer"]    = softConfig.temp.checkTimer;
+  jsonConfigTemp["owLocationId"]  = softConfig.temp.owLocationId;
+  jsonConfigTemp["owCheckTimer"]  = softConfig.temp.owCheckTimer;
+  jsonConfigTemp["owApiKey"]      = softConfig.temp.owApiKey;
+  jsonConfigTemp["owEnable"]      = softConfig.temp.owEnable;
+  jsonConfigCloud["apiKey"]       = softConfig.cloud.apiKey;
+  jsonConfigCloud["url"]          = softConfig.cloud.url;
+  jsonConfigCloud["enable"]       = softConfig.cloud.enable;
   serializeJson(jsonConfig, dataJsonConfig);
 
   return dataJsonConfig;
@@ -850,6 +851,12 @@ bool wifiConnect(String ssid, String password)
 // --------------------------------
 void updateCheck(bool displayScreen)
 {
+    if (softConfig.checkUpdateEnable == 0)
+    {
+      return;
+    }
+
+
     if (displayScreen)
     {
       display.println("- check update");
@@ -1150,21 +1157,6 @@ void webRoot()
   message += "<br>";
 
   message += "</html>";
-  server.send(200, "text/html", message);
-}
-void webDebug()
-{
-  String message = "<!DOCTYPE HTML>";
-  message += "<html>";
-  message += SOFT_NAME; message += " - debug -<a href='/reload'>reload</a> ";
-  message += "<br><br>\n";
-  message += "<form action='/write' method='GET'>Adjustment  : <input type=text name=adjustment><input type=submit></form><br>\n";
-  message += "<form action='/write' method='GET'>Check Timer : <input type=text name=checkTimer><input type=submit></form><br>\n";
-  message += "<form action='/write' method='GET'>OpenWeather Check Timer : <input type=text name=owCheckTimer><input type=submit></form><br>\n";
-  message += "<form action='/write' method='GET'>OpenWeather Location ID : <input type=text name=owLocationId><input type=submit></form><br>\n";
-  message += "<br><br>\n";
-  message += "<a href='/reboot'>Rebbot device</a><br>\n";
-  message += "</html>\n";
   server.send(200, "text/html", message);
 }
 void webReboot()
@@ -1523,6 +1515,14 @@ index_html += R"rawliteral(</span>
   <p>
   <div id="chart-day" class="container"></div>
   </p>
+
+
+<footer style="position: absolute;bottom: 0;width: 100%;max-width: 520px;height: 30px;">
+    <div class="pull-right">
+                <a href="/config">Configuration</a>
+    </div>
+</footer>
+
 </body>
 
 
@@ -1680,8 +1680,8 @@ void web_config()
         <p>Temperature sensor</p>
         <p>
           <ul class="list-group">
-          <li class="list-group-item">Adjustment<span class="pull-right"><input type="text" value=adjustment id=tempAdjustment onChange="updateText('tempAdjustment')"></span></li>
-          <li class="list-group-item">Check Timer<span class="pull-right"><input type="text" value=checkTimer id=tempCheckTimer onChange="updateText('tempCheckTimer')"></span></li>
+          <li class="list-group-item">Adjustment<span class="pull-right"><input type="text" value=adjustment id=tempAdjustment onChange="updateText('tempAdjustment')">C</span></li>
+          <li class="list-group-item">Check Timer<span class="pull-right"><input type="text" value=checkTimer id=tempCheckTimer onChange="updateText('tempCheckTimer')">sec</span></li>
           </ul>
         </p>
       </li>
@@ -1690,9 +1690,9 @@ void web_config()
         <p>
           <ul class="list-group">
           <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=owEnable onChange="updateBinary('owEnable')"></span></li>
-          <li class="list-group-item">Check Timer<span class="pull-right"><input type="text" value=checkTimer id=owCheckTimer onChange="updateText('owCheckTimer')"></span></li>
-          <li class="list-group-item">LocationId<span class="pull-right"><input type="text" value=locationId id=owLocationId onChange="updateText('owLocationId')"></span></li>
-          <li class="list-group-item">API Key<span class="pull-right"><input type="text" value=apiKey id=owApiKey onChange="updateText('owApiKey')"></span></li>
+          <li class="list-group-item">Check Timer<span class="pull-right"><input type="text" value=checkTimer id=owCheckTimer onChange="updateText('owCheckTimer')">sec</span></li>
+          <li class="list-group-item">LocationId<span class="pull-right"><input type="text" value=locationId id=owLocationId onChange="updateText('owLocationId')"><a href='https://openweathermap.org/find' target="_blank">Find ID</a></span></li>
+          <li class="list-group-item">API Key<span class="pull-right"><input type="text" value=apiKey id=owApiKey onChange="updateText('owApiKey')"><a href='https://openweathermap.org/appid' target="_blank">Create ApiKey</a></span></li>
           </ul>
         </p>
       </li>
@@ -1703,6 +1703,7 @@ void web_config()
           <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=cloudEnable onChange="updateBinary('cloudEnable')"></span></li>
           <li class="list-group-item">URL<span class="pull-right"><input type="text" value=url id=cloudUrl onChange="updateText('cloudUrl')"></span></li>
           <li class="list-group-item">API Key<span class="pull-right"><input type="text" value=apiKey id=cloudApiKey onChange="updateText('cloudApiKey')"></span></li>
+          <li class="list-group-item">&nbsp;<span class="pull-right"><a href='https://github.com/maertems/bicoqueTemperature' target="_blank">Docs</a></span></li>
           </ul>
         </p>
       </li>
@@ -1922,7 +1923,8 @@ void screenDisplayMain()
 
 
 
-void setup() {
+void setup() 
+{
   // Start the Serial Monitor
   Serial.begin(115200);
   // Start the DS18B20 sensor
@@ -1971,19 +1973,21 @@ void setup() {
       else
       {
         // For update
-        String lineToLog = "Check update new feature : softVersion : ";
-        lineToLog       += softConfig.softVersion;
-        logger(lineToLog);
-
-        if ( softConfig.softVersion == "" )
+        if ( softConfig.softVersion < "0.1.61" or softConfig.softVersion == "null" or softConfig.softVersion == "" )
         {
-          logger("  -> Enter in update if");
-          softConfig.softVersion       = SOFT_VERSION;
           softConfig.temp.owEnable     = 1;
           softConfig.checkUpdateEnable = 1;
           softConfig.cloud.enable      = 1;
+          softConfig.alreadyStart      = 1;
           configSave();
         }
+
+        if (softConfig.softVersion != SOFT_VERSION)
+        {
+          softConfig.softVersion = SOFT_VERSION;
+          configSave();
+        }
+
       }
 
     }
@@ -2053,30 +2057,30 @@ void setup() {
   // Start the server
   display.println("- load webserver");
 
-  //server.on("/", webRoot);
   server.on("/", web_index);
   server.on("/config", web_config);
   server.on("/reload", webReload);
   server.on("/write", webWrite);
-  server.on("/debug", webDebug);
   server.on("/reboot", webReboot);
-  server.on("/display", webDisplay);
   server.on("/temperature", webTemperature);
 
   server.on("/api/config", webApiConfig);
   server.on("/api/history", webApiHistory);
   server.on("/api/historyByDay", webApiHistoryByDay);
   server.on("/api/historyClear", webApiHistoryClear);
+  server.on("/api/forecast", webApiForecast);
+
+  server.on("/setting", webWifiWrite);
+  server.on("/wifi", webWifiSetup);
+
+  //-- debug / help programming
+  server.on("/display", webDisplay);
   server.on("/api/historyFake", webApiHistoryFake);
   server.on("/api/historyRotate", webApiHistoryRotate);
-  server.on("/api/forecast", webApiForecast);
 
   server.on("/fs/dir", webFsDir);
   server.on("/fs/read", webFsRead);
   server.on("/fs/del", webFsDel);
-
-  server.on("/setting", webWifiWrite);
-  server.on("/wifi", webWifiSetup);
 
   server.onNotFound(webNotFound);
   server.begin();
@@ -2193,27 +2197,33 @@ void loop()
     // log all temeratures
     dataSave();
 
-    // Flood on SFR network and they blacklist IPs
-    if (dataToPutCounter > 10)
+    if (softConfig.cloud.enable == 1)
     {
-      dataPut("indoor", temperature, timeNow);
-      dataToPutCounter = 0;
+      // Flood on SFR network and they blacklist IPs
+      if (dataToPutCounter > 10)
+      {
+        dataPut("indoor", temperature, timeNow);
+        dataToPutCounter = 0;
+      }
+      dataToPutCounter++;
     }
-    dataToPutCounter++;
 
     timeNow = timeClient.getEpochTime();
     timerTemperatureLast = timeNow;
   }
 
 
-  if ( ( timerOpenWeatherLast + softConfig.temp.owCheckTimer) < timeNow )
+  if ( (softConfig.temp.owEnable == 1) and ( ( timerOpenWeatherLast + softConfig.temp.owCheckTimer) < timeNow ))
   {
     // Get Info from openweathermap
     openWeatherGetWeather(Meteo);
 
     Serial.print("Object Meteo.temp : "); Serial.println(Meteo.temp);
 
-    dataPut("outdoor", Meteo.temp, timeNow);
+    if (softConfig.cloud.enable == 1)
+    {
+      dataPut("outdoor", Meteo.temp, timeNow);
+    }
     timerOpenWeatherLast = timeNow;
     timeNow = timeClient.getEpochTime();
   }
