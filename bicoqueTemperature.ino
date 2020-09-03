@@ -38,7 +38,7 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.1.64"
+#define SOFT_VERSION "0.1.65"
 #define SOFT_DATE "2020-09-03"
 
 #define DEBUG 0
@@ -78,13 +78,14 @@ bool networkEnable      = 1;
 bool internetConnection = 0;
 IPAddress ip;
 int wifiActivationTempo = 600; // Time to enable wifi if it s define disable
+bool displayIp          = 1;   // if we display IP on screen. Let it displayed for the first 1 min
+
 
 // Timer variable
 int timerTemperatureLast = 0;
 int dataToPutCounter     = 0;
 int timerOpenWeatherLast = 0;
 int timerPerHourLast     = 0;
-
 
 // Wifi AP info for configuration
 const char* wifiApSsid = SOFT_NAME;
@@ -126,11 +127,17 @@ typedef struct configCloud
   String  url;
   String  apiKey;
 };
+typedef struct configMessage
+{
+  String text     = "";
+  int    duration = 86400; // -1 for always
+};
 typedef struct config
 {
   configWifi wifi;
   configTemp temp;
   configCloud cloud;
+  configMessage message;
   boolean alreadyStart;
   String softName;
   String softVersion;
@@ -592,9 +599,10 @@ String configSerialize()
 {
   String dataJsonConfig;
   DynamicJsonDocument jsonConfig(800);
-  JsonObject jsonConfigWifi  = jsonConfig.createNestedObject("wifi");
-  JsonObject jsonConfigTemp  = jsonConfig.createNestedObject("temp");
-  JsonObject jsonConfigCloud = jsonConfig.createNestedObject("cloud");
+  JsonObject jsonConfigWifi    = jsonConfig.createNestedObject("wifi");
+  JsonObject jsonConfigTemp    = jsonConfig.createNestedObject("temp");
+  JsonObject jsonConfigCloud   = jsonConfig.createNestedObject("cloud");
+  JsonObject jsonConfigMessage = jsonConfig.createNestedObject("message");
 
   jsonConfig["alreadyStart"]      = softConfig.alreadyStart;
   jsonConfig["checkUpdateEnable"] = softConfig.checkUpdateEnable;
@@ -612,6 +620,8 @@ String configSerialize()
   jsonConfigCloud["apiKey"]       = softConfig.cloud.apiKey;
   jsonConfigCloud["url"]          = softConfig.cloud.url;
   jsonConfigCloud["enable"]       = softConfig.cloud.enable;
+  jsonConfigMessage["texte"]      = softConfig.message.text;
+  jsonConfigMessage["duration"]   = softConfig.message.duration;
   serializeJson(jsonConfig, dataJsonConfig);
 
   return dataJsonConfig;
@@ -666,6 +676,8 @@ bool configRead(config &ConfigTemp)
   ConfigTemp.cloud.enable      = jsonConfig["cloud"]["enable"];
   ConfigTemp.cloud.apiKey      = jsonConfig["cloud"]["apiKey"].as<String>();
   ConfigTemp.cloud.url         = jsonConfig["cloud"]["url"].as<String>();
+  ConfigTemp.message.text      = jsonConfig["message"]["text"].as<String>();
+  ConfigTemp.message.duration  = jsonConfig["message"]["duration"];
 
   return true;
 
@@ -688,6 +700,9 @@ void configDump(config ConfigTemp)
   Serial.print("  - enable : "); Serial.println(ConfigTemp.cloud.enable);
   Serial.print("  - apiKey : "); Serial.println(ConfigTemp.cloud.apiKey);
   Serial.print("  - url : "); Serial.println(ConfigTemp.cloud.url);
+  Serial.println("message data :");
+  Serial.print("  - text : "); Serial.println(ConfigTemp.message.text);
+  Serial.print("  - duration : "); Serial.println(ConfigTemp.message.duration);
   Serial.println("General data :");
   Serial.print("  - alreadyStart : "); Serial.println(ConfigTemp.alreadyStart);
   Serial.print("  - checkUpdateEnable : "); Serial.println(ConfigTemp.checkUpdateEnable);
@@ -1008,7 +1023,53 @@ bool dataPut(String type, float temp, unsigned int timestamp)
   }
 }
 
+bool getCloudMessage()
+{
+  if (internetConnection and softConfig.cloud.enable)
+  {
+    if (softConfig.cloud.url != "" and softConfig.cloud.apiKey != "")
+    {
+      HTTPClient httpClient;
+      String urlTemp = softConfig.cloud.url;
+      urlTemp += "/message.php";
+      String message = "secret=";
+      message += softConfig.cloud.apiKey;
 
+      if (DEBUG)
+      {
+        Serial.print("dataPush : Url for external use : "); Serial.println(urlTemp);
+      }
+
+      httpClient.begin(urlTemp);
+      httpClient.addHeader("Content-Type", "application/x-www-form-urlencoded");
+      int httpResponseCode = httpClient.POST(message);
+      if (httpResponseCode > 0)
+      {
+        String payload = httpClient.getString();
+        httpClient.end();
+
+        DynamicJsonDocument root(400);
+
+        // Parse JSON object
+        DeserializationError jsonError = deserializeJson(root, payload);
+        if (jsonError)
+        {
+          Serial.println("Got Error when deserialization : "); //Serial.println(jsonError);
+          Serial.print(F("deserializeJson() failed: "));
+          Serial.println(jsonError.c_str());
+
+          return 0;
+        }
+
+        softConfig.message.text     = root["message"].as<String>();
+        softConfig.message.duration = root["duration"];
+        configSave();
+      }
+
+      return 1;
+    }
+  }
+}
 
 
 void testscrolltext(void) 
@@ -1268,22 +1329,25 @@ void webWrite()
 {
   String message;
 
-  String adjustment    = server.arg("tempAdjustment");
-  String checkTimer    = server.arg("tempCheckTimer");
+  String adjustment      = server.arg("tempAdjustment");
+  String checkTimer      = server.arg("tempCheckTimer");
 
-  String owLocationId  = server.arg("owLocationId");
-  String owCheckTimer  = server.arg("owCheckTimer");
-  String owApiKey      = server.arg("owApiKey");
-  String owEnable      = server.arg("owEnable");
+  String owLocationId    = server.arg("owLocationId");
+  String owCheckTimer    = server.arg("owCheckTimer");
+  String owApiKey        = server.arg("owApiKey");
+  String owEnable        = server.arg("owEnable");
 
-  String cloudUrl      = server.arg("cloudUrl");
-  String cloudApiKey   = server.arg("cloudApiKey");
-  String cloudEnable   = server.arg("cloudEnable");
+  String cloudUrl        = server.arg("cloudUrl");
+  String cloudApiKey     = server.arg("cloudApiKey");
+  String cloudEnable     = server.arg("cloudEnable");
 
-  String wifiEnable    = server.arg("wifiEnable");
+  String messageText     = server.arg("messageText");
+  String messageDuration = server.arg("messageDuration");
 
-  String alreadyBoot   = server.arg("alreadStart");
-  String checkUpdate   = server.arg("checkUpdateEnable");
+  String wifiEnable      = server.arg("wifiEnable");
+
+  String alreadyBoot     = server.arg("alreadStart");
+  String checkUpdate     = server.arg("checkUpdateEnable");
 
 
   // Global ----------  
@@ -1358,6 +1422,18 @@ void webWrite()
   if (cloudApiKey != "")
   {
     softConfig.cloud.apiKey = cloudApiKey;
+    configSave();
+  }
+
+  // Message
+  if (messageText != "")
+  {
+    softConfig.message.text = messageText;
+    configSave();
+  }
+  if (messageDuration != "")
+  {
+    softConfig.message.duration = messageDuration.toInt();
     configSave();
   }
 
@@ -1830,7 +1906,7 @@ getData();
 // DISPLAY Screen
 void screenDisplayMain()
 {
-  if (DEBUG and 1 == 0)  // too much log on serial
+  if (DEBUG)
   {
     Serial.println("List of thing to print on display :");
     Serial.print("temperature : "); Serial.println(temperature);
@@ -1875,13 +1951,13 @@ void screenDisplayMain()
   // Lower line
 
   // message
-  // if (timeClient.getHours() > 7 )
-  // {
-  //   display.setCursor(0,55);
-  //   display.print("Bon Anniv Marie");
-  //   Serial.println("Bon anniv");
-  // }
-  // else
+  if (softConfig.message.text != "")
+  {
+    display.setCursor(0,55);
+    display.print(softConfig.message.text);
+    if (DEBUG) { Serial.println(softConfig.message.text); }
+  }
+  else
   {
     // Time
     display.setCursor(0,55);
@@ -1896,9 +1972,16 @@ void screenDisplayMain()
     display.print(hours); display.print(":"); display.print(minutes);
 
     // IP
-    display.setTextSize(1);
-    display.setCursor(40,55);
-    display.print(ip);
+    if (displayIp)
+    {
+      display.setTextSize(1);
+      display.setCursor(40,55);
+      display.print(ip);
+      if (millis() > 60 * 1000) // for 60 secs
+      {
+        displayIp = 0;
+      }
+    }
   }
 
   display.display();
@@ -2017,6 +2100,8 @@ void setup()
       softConfig.cloud.enable      = 0;
       softConfig.cloud.url         = "";
       softConfig.cloud.apiKey      = "";
+      softConfig.message.text      = "";
+      softConfig.message.duration  = 86400;
       softConfig.alreadyStart      = 0;
       softConfig.softName          = SOFT_NAME;
       softConfig.softVersion       = SOFT_VERSION;
@@ -2172,7 +2257,6 @@ void loop()
   }
 
 
-  //if (tempTimer > (softConfig.temp.checkTimer / sleepDelay) )
   if ( (timerTemperatureLast + softConfig.temp.checkTimer) < timeNow )
   {
     // Get sensor from 1wire
@@ -2234,6 +2318,9 @@ void loop()
     dataStats(timeNow);
     dataRotateToDay();
     timerPerHourLast = timeNow;
+
+    // message to display on screen. Not used for instant message.
+    getCloudMessage();
 
     String messageToLog = "Datalog: temp int: "; messageToLog += temperature; messageToLog += " / Temp ext : "; messageToLog += Meteo.temp;
     logger(messageToLog);
