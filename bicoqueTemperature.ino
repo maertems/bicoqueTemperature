@@ -1064,10 +1064,13 @@ bool getCloudMessage()
           return 0;
         }
 
-        softConfig.message.enable   = root["enable"];
-        softConfig.message.text     = root["text"].as<String>();
-        softConfig.message.duration = root["duration"];
-        configSave();
+        if (root["enable"])
+        {
+          softConfig.message.enable   = root["enable"];
+          softConfig.message.text     = root["text"].as<String>();
+          softConfig.message.duration = root["duration"];
+          configSave();
+        }
       }
 
       return 1;
