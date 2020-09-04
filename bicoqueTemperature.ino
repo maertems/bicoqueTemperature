@@ -38,8 +38,8 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.1.65"
-#define SOFT_DATE "2020-09-03"
+#define SOFT_VERSION "0.2.00"
+#define SOFT_DATE "2020-09-04"
 
 #define DEBUG 0
 
@@ -129,6 +129,7 @@ typedef struct configCloud
 };
 typedef struct configMessage
 {
+  boolean enable  = 0;
   String text     = "";
   int    duration = 86400; // -1 for always
 };
@@ -224,7 +225,6 @@ bool storageWrite(char *fileName, String dataText)
   return true;
 }
 
-//bool storageAppend(char *fileName, String dataText)
 bool storageAppend(String fileName, String dataText)
 {
   File file = SPIFFS.open(fileName, "a");
@@ -620,7 +620,8 @@ String configSerialize()
   jsonConfigCloud["apiKey"]       = softConfig.cloud.apiKey;
   jsonConfigCloud["url"]          = softConfig.cloud.url;
   jsonConfigCloud["enable"]       = softConfig.cloud.enable;
-  jsonConfigMessage["texte"]      = softConfig.message.text;
+  jsonConfigMessage["enable"]     = softConfig.message.enable;
+  jsonConfigMessage["text"]       = softConfig.message.text;
   jsonConfigMessage["duration"]   = softConfig.message.duration;
   serializeJson(jsonConfig, dataJsonConfig);
 
@@ -701,6 +702,7 @@ void configDump(config ConfigTemp)
   Serial.print("  - apiKey : "); Serial.println(ConfigTemp.cloud.apiKey);
   Serial.print("  - url : "); Serial.println(ConfigTemp.cloud.url);
   Serial.println("message data :");
+  Serial.print("  - enable : "); Serial.println(ConfigTemp.message.enable);
   Serial.print("  - text : "); Serial.println(ConfigTemp.message.text);
   Serial.print("  - duration : "); Serial.println(ConfigTemp.message.duration);
   Serial.println("General data :");
@@ -1048,6 +1050,7 @@ bool getCloudMessage()
         String payload = httpClient.getString();
         httpClient.end();
 
+        if (DEBUG) { Serial.print("dataPush : --> payload : "); Serial.println(payload); }
         DynamicJsonDocument root(400);
 
         // Parse JSON object
@@ -1061,7 +1064,8 @@ bool getCloudMessage()
           return 0;
         }
 
-        softConfig.message.text     = root["message"].as<String>();
+        softConfig.message.enable   = root["enable"];
+        softConfig.message.text     = root["text"].as<String>();
         softConfig.message.duration = root["duration"];
         configSave();
       }
@@ -1197,29 +1201,6 @@ void displayMeteo()
 // ********************************************
 // WebServer
 // ********************************************
-void webRoot() 
-{
-  String message = "<!DOCTYPE HTML>";
-  message += "<html>";
-
-  message += SOFT_NAME;
-  message += " v";
-  message += SOFT_VERSION;
-  message += " <a href='/reload'>reload</a> ";
-  message += "<br><br>";
-
-  message += "Temperature : "; message += temperature; message += " °C<br>";
-  message += "Adjustment : "; message += softConfig.temp.adjustment; message += " °C<br>";
-  message += "Adjustment : "; message += softConfig.temp.checkTimer; message += " sec<br>";
-  message += "<br><br>";
-
-  message += "Wifi power : "; message += WiFi.RSSI(); message += "<br>";
-  message += "Wifi power : "; message += wifiPower(); message += "<br>";
-  message += "<br>";
-
-  message += "</html>";
-  server.send(200, "text/html", message);
-}
 void webReboot()
 {
   String message = "<!DOCTYPE HTML>";
@@ -1320,11 +1301,6 @@ void webNotFound() {
   server.send(404, "text/plain", message);
 }
 
-void webReload()
-{
-  webRoot();
-}
-
 void webWrite()
 {
   String message;
@@ -1341,6 +1317,7 @@ void webWrite()
   String cloudApiKey     = server.arg("cloudApiKey");
   String cloudEnable     = server.arg("cloudEnable");
 
+  String messageEnable   = server.arg("messageEnable");
   String messageText     = server.arg("messageText");
   String messageDuration = server.arg("messageDuration");
 
@@ -1426,6 +1403,12 @@ void webWrite()
   }
 
   // Message
+  if (messageEnable != "")
+  {
+    softConfig.message.enable = false;
+    if ( messageEnable == "1") { softConfig.message.enable = true; }
+    configSave();
+  }
   if (messageText != "")
   {
     softConfig.message.text = messageText;
@@ -1539,9 +1522,7 @@ void web_index()
 
   // Get historic from file
   String data = dataRead();
-  //String data = "[]";
   String dataDay = dataReadNew();
-  //String dataDay = "[]";
 
   String index_html = R"rawliteral(
 <!DOCTYPE HTML><html>
@@ -1567,6 +1548,8 @@ void web_index()
   </style>
 </head>
 <body>
+<div class="container" style="width: 80%; margin: auto;max-width: 564px">
+
   <h2>My Home</h2>
   <p>
     <i class="fas fa-thermometer-half" style="color:#059e8a;"></i> 
@@ -1592,13 +1575,14 @@ index_html += R"rawliteral(</span>
   <div id="chart-day" class="container"></div>
   </p>
 
-
-<footer style="position: absolute;bottom: 0;width: 100%;max-width: 520px;height: 30px;">
+  <p>
     <div class="pull-right">
+                <a href="/message">Message</a> | 
                 <a href="/config">Configuration</a>
     </div>
-</footer>
+  </p>
 
+</div>
 </body>
 
 
@@ -1895,6 +1879,100 @@ getData();
   server.send(200, "text/html", index_html);
 }
 
+void web_message()
+{
+  String index_html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+
+</head>
+<body>
+
+<div class="container" style="width: 80%; margin: auto;max-width: 564px">
+  <h2>bicoqueTemperature</h2>
+
+    <p>
+    <ul class="list-group">
+      <li class="list-group-item">
+        <p>Message</p>
+        <p>
+          <ul class="list-group">
+          <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=messageEnable onChange="updateBinary('messageEnable')"></span></li>
+          <li class="list-group-item">Text to display<span class="pull-right"><input type="text" value=text id=messageText onChange="updateText('messageText')"></span></li>
+          </ul>
+        </p>
+      </li>
+    </ul>
+    </p>
+
+</div>
+</body>
+
+<script>
+function getData()
+{
+  var xhttp = new XMLHttpRequest();
+
+  xhttp.onreadystatechange = function()
+  {
+    if (this.readyState == 4 && this.status == 200)
+    {
+      const obj = JSON.parse(this.responseText);
+      //console.log(obj.wifi.ssid);
+      document.getElementById("messageText").value = obj.message.text;
+      document.getElementById("messageEnable").checked = obj.message.enable;
+    }
+  };
+  xhttp.open("GET", "/api/config", true);
+  xhttp.send();
+}
+
+function updateBinary(binary)
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/write?" + binary + "=";
+
+  if (document.getElementById(binary).checked == true) { url = url + "1"; }
+  else { url = url + "0"; }
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+function updateText(textId)
+{
+  var xhr = new XMLHttpRequest();
+  var url = "/write?" + textId + "=" + document.getElementById(textId).value;
+
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4 && xhr.status === 200) {
+        // console.log(xhr.responseText);
+    }
+  };
+
+  xhr.open("GET", url, true);
+  xhr.send();
+}
+getData();
+</script>
+
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", index_html);
+}
 
 
 
@@ -1906,7 +1984,7 @@ getData();
 // DISPLAY Screen
 void screenDisplayMain()
 {
-  if (DEBUG)
+  if (DEBUG and 1 == 0)
   {
     Serial.println("List of thing to print on display :");
     Serial.print("temperature : "); Serial.println(temperature);
@@ -1951,11 +2029,11 @@ void screenDisplayMain()
   // Lower line
 
   // message
-  if (softConfig.message.text != "")
+  if (softConfig.message.enable)
   {
     display.setCursor(0,55);
     display.print(softConfig.message.text);
-    if (DEBUG) { Serial.println(softConfig.message.text); }
+    if (DEBUG) { Serial.print("Message to print on display : "); Serial.println(softConfig.message.text); }
   }
   else
   {
@@ -2065,6 +2143,12 @@ void setup()
           configSave();
         }
 
+        if ( softConfig.softVersion < "0.1.66")
+        {
+          softConfig.message.enable      = 0;
+          configSave();
+        }
+
         if (softConfig.softVersion != SOFT_VERSION)
         {
           softConfig.softVersion = SOFT_VERSION;
@@ -2100,6 +2184,7 @@ void setup()
       softConfig.cloud.enable      = 0;
       softConfig.cloud.url         = "";
       softConfig.cloud.apiKey      = "";
+      softConfig.message.enable    = 0;
       softConfig.message.text      = "";
       softConfig.message.duration  = 86400;
       softConfig.alreadyStart      = 0;
@@ -2144,7 +2229,7 @@ void setup()
 
   server.on("/", web_index);
   server.on("/config", web_config);
-  server.on("/reload", webReload);
+  server.on("/message", web_message);
   server.on("/write", webWrite);
   server.on("/reboot", webReboot);
   server.on("/temperature", webTemperature);
