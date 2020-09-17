@@ -38,8 +38,8 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.2.00"
-#define SOFT_DATE "2020-09-04"
+#define SOFT_VERSION "0.2.01"
+#define SOFT_DATE "2020-09-16"
 
 #define DEBUG 0
 
@@ -1908,7 +1908,7 @@ void web_message()
         <p>
           <ul class="list-group">
           <li class="list-group-item">Enable<span class="pull-right"><input type="checkbox" data-toggle="toggle" id=messageEnable onChange="updateBinary('messageEnable')"></span></li>
-          <li class="list-group-item">Text to display<span class="pull-right"><input type="text" value=text id=messageText onChange="updateText('messageText')"></span></li>
+          <li class="list-group-item">Text to display<span class="pull-right"><input type="text" maxlength="21" size="21"  value=text id=messageText onChange="updateText('messageText')"></span></li>
           </ul>
         </p>
       </li>
