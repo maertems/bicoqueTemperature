@@ -38,8 +38,8 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.2.02"
-#define SOFT_DATE "2020-09-17"
+#define SOFT_VERSION "0.2.03"
+#define SOFT_DATE "2020-09-21"
 
 #define DEBUG 0
 
@@ -92,7 +92,7 @@ const char* wifiApSsid = SOFT_NAME;
 
 
 // Update info
-#define BASE_URL "http://esp.mangue.net/ota/esp/" SOFT_NAME "/"
+#define BASE_URL "http://esp.bicoque.com/ota/esp/" SOFT_NAME "/"
 #define UPDATE_URL BASE_URL "update.php"
 
 
