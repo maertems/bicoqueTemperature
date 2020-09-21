@@ -38,8 +38,8 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.2.01"
-#define SOFT_DATE "2020-09-16"
+#define SOFT_VERSION "0.2.02"
+#define SOFT_DATE "2020-09-17"
 
 #define DEBUG 0
 
@@ -2412,6 +2412,10 @@ void loop()
 
     String messageToLog = "Datalog: temp int: "; messageToLog += temperature; messageToLog += " / Temp ext : "; messageToLog += Meteo.temp;
     logger(messageToLog);
+
+    messageToLog = "Debug: heapSize        : "; messageToLog += ESP.getFreeHeap() ; logger(messageToLog);
+//    messageToLog = "Debug: heapMaxFree     : "; messageToLog += ESP.getMaxFreeBlockSize() ; logger(messageToLog);
+    messageToLog = "Debug: sketchFreeSpace : "; messageToLog += ESP.getFreeSketchSpace() ; logger(messageToLog);
   }
 
   // need to display the time  
