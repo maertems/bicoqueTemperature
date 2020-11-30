@@ -38,10 +38,10 @@ Not yet :)
 
 // firmware version
 #define SOFT_NAME "bicoqueTemperature"
-#define SOFT_VERSION "0.2.03"
-#define SOFT_DATE "2020-09-21"
+#define SOFT_VERSION "0.2.09"
+#define SOFT_DATE "2020-10-05"
 
-#define DEBUG 0
+#define DEBUG 1
 
 // NTP Constant
 #define NTP_SERVER "ntp.ovh.net"
@@ -92,7 +92,7 @@ const char* wifiApSsid = SOFT_NAME;
 
 
 // Update info
-#define BASE_URL "http://esp.bicoque.com/ota/esp/" SOFT_NAME "/"
+#define BASE_URL "http://esp.bicoque.com/" SOFT_NAME "/"
 #define UPDATE_URL BASE_URL "update.php"
 
 
@@ -911,6 +911,34 @@ void updateCheck(bool displayScreen)
     }
 }
 
+void updateWebServerFile(String fileName)
+{
+    HTTPClient httpClient;
+    String urlTemp = BASE_URL;
+    urlTemp += fileName;
+
+    if (DEBUG)
+    {
+      Serial.print("updateWebServerFiles : Url for external use : "); Serial.println(urlTemp);
+    }
+
+    httpClient.begin(urlTemp);
+    int httpResponseCode = httpClient.GET();
+    if (httpResponseCode > 0)
+    {
+      Serial.print("Size from file : "); Serial.println(httpClient.getSize());
+
+      File file = SPIFFS.open(fileName, "w");
+      int bytesWritten = httpClient.writeToStream(&file);
+      //String payload = httpClient.getString();
+      //httpClient.end();
+      //file.println(payload);
+      file.close();
+ 
+      Serial.print("BytesWritten : "); Serial.println(bytesWritten);
+
+    }
+}
 
 
 
@@ -1236,6 +1264,14 @@ void webFsDel()
   storageDel(file);
   server.send(200, "text/html", "done");
 }
+void webFsDownload()
+{
+  String file    = server.arg("file");
+
+  updateWebServerFile(file);
+  server.send(200, "text/html", "done");
+}
+
 
 
 void webApiConfig()
@@ -2152,12 +2188,6 @@ void setup()
           configSave();
         }
 
-        if (softConfig.softVersion != SOFT_VERSION)
-        {
-          softConfig.softVersion = SOFT_VERSION;
-          configSave();
-        }
-
       }
 
     }
@@ -2230,12 +2260,20 @@ void setup()
   // Start the server
   display.println("- load webserver");
 
+  // server.serveStatic("/", SPIFFS, "/index.html","Content-Security-Policy script-src;" );
   server.on("/", web_index);
   server.on("/config", web_config);
   server.on("/message", web_message);
   server.on("/write", webWrite);
   server.on("/reboot", webReboot);
   server.on("/temperature", webTemperature);
+  server.serveStatic("/web/bootstrap-3.4.1.min.css", SPIFFS, "/serverweb/bootstrap-3.4.1.min.css");
+  server.serveStatic("/web/bootstrap-3.4.1.min.js", SPIFFS, "/serverweb/bootstrap-3.4.1.min.js");
+  server.serveStatic("/web/fontawesome-v5.7.2-all.css", SPIFFS, "/serverweb/fontawesome-v5.7.2-all.css");
+  server.serveStatic("/web/highcharts.js", SPIFFS, "/serverweb/highcharts.js");
+  server.serveStatic("/web/jquery-3.5.1.min.js", SPIFFS, "/serverweb/jquery-3.5.1.min.js");
+
+  server.serveStatic("/fs/config", SPIFFS, "/config.json");
 
   server.on("/api/config", webApiConfig);
   server.on("/api/history", webApiHistory);
@@ -2254,6 +2292,7 @@ void setup()
   server.on("/fs/dir", webFsDir);
   server.on("/fs/read", webFsRead);
   server.on("/fs/del", webFsDel);
+  server.on("/fs/download", webFsDownload);
 
   server.onNotFound(webNotFound);
   server.begin();
@@ -2282,6 +2321,26 @@ void setup()
     String messageToLog = SOFT_VERSION ; messageToLog += " "; messageToLog += SOFT_DATE;
     logger(messageToLog);
   }
+
+
+
+  //-- things to do for upgrade after internet connection TODO: what we do if we have not internet connection... Example for the first use....
+  if ( softConfig.softVersion < "0.2.07")
+  {
+    updateWebServerFile("/webserver/bootstrap-3.4.1.min.css");
+    updateWebServerFile("/webserver/bootstrap-3.4.1.min.js");
+    updateWebServerFile("/webserver/fontawesome-v5.7.2-all.css");
+    updateWebServerFile("/webserver/highcharts.js");
+    updateWebServerFile("/webserver/jquery-3.5.1.min.js");
+  }
+
+
+  if (softConfig.softVersion != SOFT_VERSION)
+  {
+    softConfig.softVersion = SOFT_VERSION;
+    configSave();
+  }
+
 
   
   display.println("Init ended.. starting");
